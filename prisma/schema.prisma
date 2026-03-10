@@ -1,0 +1,179 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── PHASE 1 MODELS ───────────────────────────────────────
+
+model User {
+  id              String       @id @default(uuid())
+  email           String       @unique
+  name            String?
+  avatar          String?
+  googleId        String?      @unique
+  isEmailVerified Boolean      @default(false)
+  role            UserRole     @default(STUDENT)
+  timezone        String       @default("UTC")
+  language        String       @default("en")
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+  deletedAt       DateTime?
+
+  sessions     Session[]
+  otps         Otp[]
+  canvases     Canvas[]
+  userSettings UserSettings?
+
+  @@map("users")
+}
+
+enum UserRole {
+  STUDENT
+  TEACHER
+  ADMIN
+  SUPER_ADMIN
+}
+
+model Session {
+  id           String   @id @default(uuid())
+  userId       String
+  refreshToken String   @unique
+  deviceInfo   Json?
+  ipAddress    String?
+  expiresAt    DateTime
+  createdAt    DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("sessions")
+}
+
+model Otp {
+  id        String   @id @default(uuid())
+  userId    String
+  code      String
+  type      OtpType
+  expiresAt DateTime
+  usedAt    DateTime?
+  attempts  Int      @default(0)
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("otps")
+}
+
+enum OtpType {
+  EMAIL_LOGIN
+  EMAIL_VERIFY
+  PASSWORD_RESET
+}
+
+model UserSettings {
+  id              String   @id @default(uuid())
+  userId          String   @unique
+  theme           String   @default("light")
+  language        String   @default("en")
+  timezone        String   @default("UTC")
+  performanceMode Boolean  @default(false)
+  profanityFilter Boolean  @default(true)
+  defaultPenSize  Float    @default(4.0)
+  defaultPenColor String   @default("#000000")
+  recentColors    Json?
+  favoriteColors  Json?
+  shortcuts       Json?
+  notifications   Json?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_settings")
+}
+
+model Canvas {
+  id          String   @id @default(uuid())
+  userId      String
+  name        String
+  description String?
+  thumbnail   String?
+  isPublic    Boolean  @default(false)
+  shareToken  String?  @unique
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  deletedAt   DateTime?
+
+  user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  slides  Slide[]
+  exports Export[]
+
+  @@map("canvases")
+}
+
+model Slide {
+  id        String   @id @default(uuid())
+  canvasId  String
+  order     Int
+  name      String?
+  elements  Json     @default("[]")
+  thumbnail String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  canvas Canvas @relation(fields: [canvasId], references: [id], onDelete: Cascade)
+
+  @@map("slides")
+}
+
+model Export {
+  id          String       @id @default(uuid())
+  canvasId    String
+  userId      String
+  format      ExportFormat
+  status      ExportStatus @default(PENDING)
+  fileUrl     String?
+  fileSize    Int?
+  error       String?
+  createdAt   DateTime     @default(now())
+  completedAt DateTime?
+
+  canvas Canvas @relation(fields: [canvasId], references: [id], onDelete: Cascade)
+
+  @@map("exports")
+}
+
+enum ExportFormat {
+  PDF
+  PNG
+  JPG
+  SVG
+}
+
+enum ExportStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+// ─── PHASE 2 STUBS ────────────────────────────────────────
+// model ChatMessage { /* TODO: Phase 2 */ }
+// model Recording { /* TODO: Phase 2 */ }
+
+// ─── PHASE 3 STUBS ────────────────────────────────────────
+// model Poll { /* TODO: Phase 3 */ }
+// model Quiz { /* TODO: Phase 3 */ }
+
+// ─── PHASE 4 STUBS ────────────────────────────────────────
+// model AiConversation { /* TODO: Phase 4 */ }
+
+// ─── PHASE 5 STUBS ────────────────────────────────────────
+// model ThreeDAsset { /* TODO: Phase 5 */ }
+
+// ─── PHASE 6 STUBS ────────────────────────────────────────
+// model Template { /* TODO: Phase 6 */ }
+// model Subscription { /* TODO: Phase 6 */ }
