@@ -1,4 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
+import { UserRole } from '@prisma/client';
 import { verifyAccessToken } from '@/shared/utils/jwt';
 import { AuthError } from '@/shared/errors/AuthError';
 
@@ -47,7 +48,7 @@ export const optionalAuthMiddleware = (req: Request, _res: Response, next: NextF
   }
 };
 
-export const roleGuard = (...roles: string[]) => {
+export const roleGuard = (...roles: UserRole[]) => {
   return (req: Request, _res: Response, next: NextFunction): void => {
     if (!req.user) {
       throw AuthError.invalidCredentials();

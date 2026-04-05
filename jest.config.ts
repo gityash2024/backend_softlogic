@@ -8,7 +8,7 @@ const config: Config = {
   moduleNameMapper: {
     '^@/(.*)$': '<rootDir>/src/$1',
   },
-  setupFilesAfterSetup: ['<rootDir>/tests/helpers/test-setup.ts'],
+  setupFilesAfterEnv: ['<rootDir>/tests/helpers/test-setup.ts'],
   collectCoverageFrom: [
     'src/**/*.ts',
     '!src/**/*.d.ts',

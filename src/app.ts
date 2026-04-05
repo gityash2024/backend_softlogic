@@ -15,6 +15,7 @@ import { slidesRoutes } from './modules/slides/slides.routes';
 import { exportRoutes } from './modules/export/export.routes';
 import { settingsRoutes } from './modules/settings/settings.routes';
 import { filterRoutes } from './modules/filter/filter.routes';
+import { adminRoutes } from './modules/admin/admin.routes';
 import {
   chatRoutes,
   mediaRoutes,
@@ -63,6 +64,7 @@ export const createApp = (): express.Application => {
   app.use(`${apiPrefix}/export`, exportRoutes);
   app.use(`${apiPrefix}/users/me/settings`, settingsRoutes);
   app.use(`${apiPrefix}/filter`, filterRoutes);
+  app.use(`${apiPrefix}/admin`, adminRoutes);
 
   // ─── Phase 2–6 Stubs ─────────────────────
   app.use(`${apiPrefix}/chat`, chatRoutes);

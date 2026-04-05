@@ -2,6 +2,9 @@ import morgan from 'morgan';
 import winston from 'winston';
 import { env } from '@/config';
 
+const canWriteLogFiles =
+  env.NODE_ENV === 'production' && process.env.VERCEL !== '1';
+
 // Winston logger
 export const logger = winston.createLogger({
   level: env.NODE_ENV === 'production' ? 'info' : 'debug',
@@ -19,7 +22,7 @@ export const logger = winston.createLogger({
   ),
   transports: [
     new winston.transports.Console(),
-    ...(env.NODE_ENV === 'production'
+    ...(canWriteLogFiles
       ? [
           new winston.transports.File({ filename: 'logs/error.log', level: 'error' }),
           new winston.transports.File({ filename: 'logs/combined.log' }),

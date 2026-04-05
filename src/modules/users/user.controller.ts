@@ -1,15 +1,15 @@
 import { Request, Response, NextFunction } from 'express';
 import { prisma } from '@/config';
 import { ApiResponse } from '@/shared/utils/api-response';
-import { toSafeUser } from '@/modules/auth/auth.types';
 import { AppError } from '@/shared/errors/AppError';
+import { findUserContextById } from './user-context.service';
 
 export class UserController {
   async getMe(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const user = await prisma.user.findUnique({ where: { id: req.user!.userId } });
+      const user = await findUserContextById(req.user!.userId);
       if (!user) throw new AppError('User not found', 404);
-      ApiResponse.success(res, toSafeUser(user));
+      ApiResponse.success(res, user);
     } catch (error) { next(error); }
   }
 
@@ -20,7 +20,8 @@ export class UserController {
         where: { id: req.user!.userId },
         data: { name, avatar, timezone, language },
       });
-      ApiResponse.success(res, toSafeUser(user), 'Profile updated');
+      const userContext = await findUserContextById(user.id);
+      ApiResponse.success(res, userContext, 'Profile updated');
     } catch (error) { next(error); }
   }
 

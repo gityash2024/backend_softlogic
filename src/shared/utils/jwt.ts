@@ -1,21 +1,25 @@
-import jwt, { JwtPayload } from 'jsonwebtoken';
+import { randomUUID } from 'crypto';
+import jwt, { JwtPayload, SignOptions } from 'jsonwebtoken';
 import { env } from '@/config';
+import { UserRole } from '@prisma/client';
 
 interface TokenPayload {
   userId: string;
   email: string;
-  role: string;
+  role: UserRole;
+  organizationId?: string | null;
 }
 
 export const generateAccessToken = (payload: TokenPayload): string => {
   return jwt.sign(payload, env.JWT_ACCESS_SECRET, {
-    expiresIn: env.JWT_ACCESS_EXPIRES_IN,
+    expiresIn: env.JWT_ACCESS_EXPIRES_IN as SignOptions['expiresIn'],
   });
 };
 
 export const generateRefreshToken = (payload: TokenPayload): string => {
   return jwt.sign(payload, env.JWT_REFRESH_SECRET, {
-    expiresIn: env.JWT_REFRESH_EXPIRES_IN,
+    jwtid: randomUUID(),
+    expiresIn: env.JWT_REFRESH_EXPIRES_IN as SignOptions['expiresIn'],
   });
 };
 

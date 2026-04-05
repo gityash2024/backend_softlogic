@@ -3,13 +3,25 @@ import { prisma } from '@/config';
 import { ApiResponse } from '@/shared/utils/api-response';
 import { AppError } from '@/shared/errors/AppError';
 import { getSkipTake, getPaginationMeta, paginationSchema } from '@/shared/utils/pagination';
+import { ensureCanvasAccess, getAccessibleOrganizationIds } from '@/shared/utils/access-control';
 
 export class CanvasController {
   async list(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const { page, perPage } = paginationSchema.parse(req.query);
       const { skip, take } = getSkipTake(page, perPage);
-      const where = { userId: req.user!.userId, deletedAt: null };
+      const accessibleOrganizationIds = await getAccessibleOrganizationIds(req.user!);
+      const where = accessibleOrganizationIds === null
+        ? { deletedAt: null }
+        : {
+            deletedAt: null,
+            OR: [
+              { userId: req.user!.userId },
+              ...(accessibleOrganizationIds.length > 0
+                ? [{ organizationId: { in: accessibleOrganizationIds } }]
+                : []),
+            ],
+          };
 
       const [canvases, total] = await Promise.all([
         prisma.canvas.findMany({ where, skip, take, orderBy: { updatedAt: 'desc' }, include: { _count: { select: { slides: true } } } }),
@@ -22,12 +34,15 @@ export class CanvasController {
 
   async create(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const { name, description } = req.body;
+      const { name, description, metadata } = req.body;
+      const organizationId = req.user?.organizationId ?? null;
       const canvas = await prisma.canvas.create({
         data: {
           userId: req.user!.userId,
+          organizationId,
           name: name || 'Untitled Canvas',
           description,
+          metadata: metadata ?? undefined,
           slides: { create: { order: 0, name: 'Slide 1' } },
         },
         include: { slides: true },
@@ -38,21 +53,23 @@ export class CanvasController {
 
   async getById(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const canvas = await prisma.canvas.findFirst({
-        where: { id: req.params.id, userId: req.user!.userId, deletedAt: null },
-        include: { slides: { orderBy: { order: 'asc' } } },
-      });
-      if (!canvas) throw new AppError('Canvas not found', 404);
+      const canvas = await ensureCanvasAccess(req.params.id, req.user!);
       ApiResponse.success(res, canvas);
     } catch (error) { next(error); }
   }
 
   async update(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const { name, description } = req.body;
+      await ensureCanvasAccess(req.params.id, req.user!);
+      const { name, description, metadata, thumbnail } = req.body;
       const canvas = await prisma.canvas.updateMany({
-        where: { id: req.params.id, userId: req.user!.userId },
-        data: { name, description },
+        where: { id: req.params.id },
+        data: {
+          name,
+          description,
+          thumbnail,
+          metadata: metadata ?? undefined,
+        },
       });
       if (canvas.count === 0) throw new AppError('Canvas not found', 404);
       const updated = await prisma.canvas.findUnique({ where: { id: req.params.id } });
@@ -62,8 +79,9 @@ export class CanvasController {
 
   async delete(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
+      await ensureCanvasAccess(req.params.id, req.user!);
       const result = await prisma.canvas.updateMany({
-        where: { id: req.params.id, userId: req.user!.userId },
+        where: { id: req.params.id },
         data: { deletedAt: new Date() },
       });
       if (result.count === 0) throw new AppError('Canvas not found', 404);

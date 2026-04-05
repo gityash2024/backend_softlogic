@@ -1,5 +1,6 @@
 generator client {
-  provider = "prisma-client-js"
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "rhel-openssl-3.0.x"]
 }
 
 datasource db {
@@ -7,26 +8,38 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// ─── PHASE 1 MODELS ───────────────────────────────────────
-
 model User {
-  id              String       @id @default(uuid())
-  email           String       @unique
-  name            String?
-  avatar          String?
-  googleId        String?      @unique
-  isEmailVerified Boolean      @default(false)
-  role            UserRole     @default(STUDENT)
-  timezone        String       @default("UTC")
-  language        String       @default("en")
-  createdAt       DateTime     @default(now())
-  updatedAt       DateTime     @updatedAt
-  deletedAt       DateTime?
+  id                    String                   @id @default(uuid())
+  email                 String                   @unique
+  name                  String?
+  avatar                String?
+  googleId              String?                  @unique
+  isEmailVerified       Boolean                  @default(false)
+  role                  UserRole                 @default(STUDENT)
+  status                UserStatus               @default(ACTIVE)
+  timezone              String                   @default("UTC")
+  language              String                   @default("en")
+  invitedAt             DateTime                 @default(now())
+  lastLoginAt           DateTime?
+  invitedById           String?
+  primaryOrganizationId String?
+  createdAt             DateTime                 @default(now())
+  updatedAt             DateTime                 @updatedAt
+  deletedAt             DateTime?
 
-  sessions     Session[]
-  otps         Otp[]
-  canvases     Canvas[]
-  userSettings UserSettings?
+  invitedBy             User?                    @relation("UserInvitations", fields: [invitedById], references: [id], onDelete: SetNull)
+  invitedUsers          User[]                   @relation("UserInvitations")
+  primaryOrganization   Organization?            @relation("PrimaryOrganization", fields: [primaryOrganizationId], references: [id], onDelete: SetNull)
+  sessions              Session[]
+  otps                  Otp[]
+  canvases              Canvas[]
+  userSettings          UserSettings?
+  memberships           OrganizationMembership[]
+  exports               Export[]
+  subscriptions         Subscription[]
+  auditLogs             AdminAuditLog[]          @relation("AuditActor")
+  liveSessionsCreated   LiveSession[]            @relation("LiveSessionCreator")
+  liveSessionParticipants LiveSessionParticipant[]
 
   @@map("users")
 }
@@ -34,8 +47,62 @@ model User {
 enum UserRole {
   STUDENT
   TEACHER
+  CUSTOMER_ADMIN
+  PARTNER_ADMIN
   ADMIN
   SUPER_ADMIN
+}
+
+enum UserStatus {
+  ACTIVE
+  DISABLED
+}
+
+model Organization {
+  id                 String                 @id @default(uuid())
+  name               String
+  slug               String                 @unique
+  kind               OrganizationKind       @default(CUSTOMER)
+  status             OrganizationStatus     @default(ACTIVE)
+  parentOrganizationId String?
+  createdAt          DateTime               @default(now())
+  updatedAt          DateTime               @updatedAt
+
+  parentOrganization Organization?          @relation("OrganizationHierarchy", fields: [parentOrganizationId], references: [id], onDelete: SetNull)
+  childOrganizations Organization[]         @relation("OrganizationHierarchy")
+  memberships        OrganizationMembership[]
+  primaryUsers       User[]                 @relation("PrimaryOrganization")
+  canvases           Canvas[]
+  subscriptions      Subscription[]
+  liveSessions       LiveSession[]
+
+  @@map("organizations")
+}
+
+enum OrganizationKind {
+  INTERNAL
+  PARTNER
+  CUSTOMER
+}
+
+enum OrganizationStatus {
+  ACTIVE
+  INACTIVE
+}
+
+model OrganizationMembership {
+  id             String       @id @default(uuid())
+  userId         String
+  organizationId String
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, organizationId])
+  @@index([organizationId])
+  @@map("organization_memberships")
 }
 
 model Session {
@@ -79,8 +146,10 @@ model UserSettings {
   theme           String   @default("light")
   language        String   @default("en")
   timezone        String   @default("UTC")
+  autoTimezoneEnabled Boolean @default(false)
   performanceMode Boolean  @default(false)
   profanityFilter Boolean  @default(true)
+  customProfanityWords Json?
   defaultPenSize  Float    @default(4.0)
   defaultPenColor String   @default("#000000")
   recentColors    Json?
@@ -96,21 +165,26 @@ model UserSettings {
 }
 
 model Canvas {
-  id          String   @id @default(uuid())
-  userId      String
-  name        String
-  description String?
-  thumbnail   String?
-  isPublic    Boolean  @default(false)
-  shareToken  String?  @unique
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-  deletedAt   DateTime?
+  id             String   @id @default(uuid())
+  userId         String
+  organizationId String?
+  name           String
+  description    String?
+  metadata       Json?
+  thumbnail      String?
+  isPublic       Boolean  @default(false)
+  shareToken     String?  @unique
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  deletedAt      DateTime?
 
-  user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  slides  Slide[]
-  exports Export[]
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  slides       Slide[]
+  exports      Export[]
+  liveSessions LiveSession[]
 
+  @@index([organizationId])
   @@map("canvases")
 }
 
@@ -142,7 +216,9 @@ model Export {
   completedAt DateTime?
 
   canvas Canvas @relation(fields: [canvasId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  @@index([userId])
   @@map("exports")
 }
 
@@ -160,20 +236,79 @@ enum ExportStatus {
   FAILED
 }
 
-// ─── PHASE 2 STUBS ────────────────────────────────────────
-// model ChatMessage { /* TODO: Phase 2 */ }
-// model Recording { /* TODO: Phase 2 */ }
+model Subscription {
+  id             String             @id @default(uuid())
+  organizationId String?
+  userId         String?
+  planName       String
+  status         SubscriptionStatus @default(ACTIVE)
+  seatLimit      Int                @default(1)
+  seatUsage      Int                @default(0)
+  startDate      DateTime
+  endDate        DateTime?
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
 
-// ─── PHASE 3 STUBS ────────────────────────────────────────
-// model Poll { /* TODO: Phase 3 */ }
-// model Quiz { /* TODO: Phase 3 */ }
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  user         User?         @relation(fields: [userId], references: [id], onDelete: SetNull)
 
-// ─── PHASE 4 STUBS ────────────────────────────────────────
-// model AiConversation { /* TODO: Phase 4 */ }
+  @@index([organizationId])
+  @@index([userId])
+  @@map("subscriptions")
+}
 
-// ─── PHASE 5 STUBS ────────────────────────────────────────
-// model ThreeDAsset { /* TODO: Phase 5 */ }
+enum SubscriptionStatus {
+  ACTIVE
+  EXPIRED
+  CANCELED
+  TRIAL
+}
 
-// ─── PHASE 6 STUBS ────────────────────────────────────────
-// model Template { /* TODO: Phase 6 */ }
-// model Subscription { /* TODO: Phase 6 */ }
+model AdminAuditLog {
+  id        String   @id @default(uuid())
+  actorUserId String
+  action    String
+  targetType String
+  targetId   String?
+  summary   String?
+  metadata  Json?
+  createdAt DateTime @default(now())
+
+  actorUser User @relation("AuditActor", fields: [actorUserId], references: [id], onDelete: Cascade)
+
+  @@index([actorUserId])
+  @@map("admin_audit_logs")
+}
+
+model LiveSession {
+  id             String   @id @default(uuid())
+  canvasId       String
+  organizationId String?
+  title          String?
+  createdById    String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  canvas       Canvas      @relation(fields: [canvasId], references: [id], onDelete: Cascade)
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  createdBy    User        @relation("LiveSessionCreator", fields: [createdById], references: [id], onDelete: Cascade)
+  participants LiveSessionParticipant[]
+
+  @@index([canvasId])
+  @@map("live_sessions")
+}
+
+model LiveSessionParticipant {
+  id            String   @id @default(uuid())
+  liveSessionId String
+  userId        String
+  joinedAt      DateTime @default(now())
+  leftAt        DateTime?
+
+  liveSession LiveSession @relation(fields: [liveSessionId], references: [id], onDelete: Cascade)
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([liveSessionId, userId])
+  @@index([userId])
+  @@map("live_session_participants")
+}

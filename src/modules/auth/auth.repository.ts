@@ -3,15 +3,30 @@ import { User, Otp, Session, OtpType } from '@prisma/client';
 
 export class AuthRepository {
   async findUserByEmail(email: string): Promise<User | null> {
-    return prisma.user.findUnique({ where: { email } });
+    return prisma.user.findFirst({
+      where: {
+        email,
+        deletedAt: null,
+      },
+    });
   }
 
   async findUserById(id: string): Promise<User | null> {
-    return prisma.user.findUnique({ where: { id } });
+    return prisma.user.findFirst({
+      where: {
+        id,
+        deletedAt: null,
+      },
+    });
   }
 
   async findUserByGoogleId(googleId: string): Promise<User | null> {
-    return prisma.user.findFirst({ where: { googleId } });
+    return prisma.user.findFirst({
+      where: {
+        googleId,
+        deletedAt: null,
+      },
+    });
   }
 
   async createUser(data: { email: string; name?: string; avatar?: string; googleId?: string; isEmailVerified?: boolean }): Promise<User> {

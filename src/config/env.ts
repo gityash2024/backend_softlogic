@@ -20,6 +20,8 @@ const envSchema = z.object({
   JWT_REFRESH_SECRET: z.string().min(32),
   JWT_ACCESS_EXPIRES_IN: z.string().default('15m'),
   JWT_REFRESH_EXPIRES_IN: z.string().default('7d'),
+  SEED_SUPER_ADMIN_EMAIL: z.string().email().default('admin@softlogicwhiteboard.com'),
+  SEED_SUPER_ADMIN_NAME: z.string().default('Softlogic Super Admin'),
 
   // Google OAuth
   GOOGLE_CLIENT_ID: z.string().optional(),
@@ -32,6 +34,8 @@ const envSchema = z.object({
   SMTP_PASS: z.string().optional(),
   EMAIL_FROM: z.string().default('noreply@softlogicwhiteboard.com'),
   EMAIL_FROM_NAME: z.string().default('Softlogic Whiteboard'),
+  DEV_FIXED_OTP_ENABLED: z.coerce.boolean().default(false),
+  DEV_FIXED_OTP_CODE: z.string().regex(/^\d{4}$/).optional(),
 
   // Cloudinary
   CLOUDINARY_CLOUD_NAME: z.string().optional(),

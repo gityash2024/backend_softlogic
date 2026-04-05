@@ -1,6 +1,24 @@
 import { Request, Response, NextFunction } from 'express';
 import { prisma } from '@/config';
 import { ApiResponse } from '@/shared/utils/api-response';
+import { findUserContextById } from '@/modules/users/user-context.service';
+import { normalizeCustomProfanityWords } from './settings.service';
+
+const toSettingsResponse = (
+  settings: {
+    recentColors?: unknown;
+    favoriteColors?: unknown;
+    customProfanityWords?: unknown;
+    [key: string]: unknown;
+  },
+  subscription: unknown,
+) => ({
+  ...settings,
+  recentColors: Array.isArray(settings.recentColors) ? settings.recentColors : [],
+  favoriteColors: Array.isArray(settings.favoriteColors) ? settings.favoriteColors : [],
+  customProfanityWords: normalizeCustomProfanityWords(settings.customProfanityWords),
+  subscription,
+});
 
 export class SettingsController {
   async getSettings(req: Request, res: Response, next: NextFunction): Promise<void> {
@@ -9,18 +27,26 @@ export class SettingsController {
       if (!settings) {
         settings = await prisma.userSettings.create({ data: { userId: req.user!.userId } });
       }
-      ApiResponse.success(res, settings);
+      const user = await findUserContextById(req.user!.userId);
+      ApiResponse.success(res, toSettingsResponse(settings, user?.subscription ?? null));
     } catch (error) { next(error); }
   }
 
   async updateSettings(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
+      const data = {
+        ...req.body,
+        customProfanityWords: req.body.customProfanityWords === undefined
+          ? undefined
+          : normalizeCustomProfanityWords(req.body.customProfanityWords),
+      };
       const settings = await prisma.userSettings.upsert({
         where: { userId: req.user!.userId },
-        update: req.body,
-        create: { userId: req.user!.userId, ...req.body },
+        update: data,
+        create: { userId: req.user!.userId, ...data },
       });
-      ApiResponse.success(res, settings, 'Settings updated');
+      const user = await findUserContextById(req.user!.userId);
+      ApiResponse.success(res, toSettingsResponse(settings, user?.subscription ?? null), 'Settings updated');
     } catch (error) { next(error); }
   }
 
@@ -30,7 +56,10 @@ export class SettingsController {
         where: { userId: req.user!.userId },
         select: { recentColors: true, favoriteColors: true },
       });
-      ApiResponse.success(res, settings || { recentColors: [], favoriteColors: [] });
+      ApiResponse.success(res, {
+        recentColors: Array.isArray(settings?.recentColors) ? settings?.recentColors : [],
+        favoriteColors: Array.isArray(settings?.favoriteColors) ? settings?.favoriteColors : [],
+      });
     } catch (error) { next(error); }
   }
 
