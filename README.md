@@ -50,6 +50,16 @@ Health endpoint:
 
 If SMTP delivery is unavailable on the machine or network, the invite-only OTP flow still creates the OTP record first and the auth flow remains testable locally.
 
+### Temporary fixed OTP support
+
+The backend also supports an optional fixed OTP fallback for testing:
+
+- enable with `DEV_FIXED_OTP_ENABLED=true`
+- default fallback code is `1234`
+- restrict usage with `DEV_FIXED_OTP_ALLOWED_EMAILS=email1@example.com,email2@example.com`
+
+This fallback is intended to be temporary and should be limited to explicit test/admin emails. All other users must continue using the real emailed OTP.
+
 ### Local smoke checks
 
 ```bash

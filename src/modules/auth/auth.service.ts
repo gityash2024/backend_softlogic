@@ -87,8 +87,11 @@ export class AuthService {
     }
 
     const normalizedCode = code.trim();
+    const normalizedEmail = email.trim().toLowerCase();
     const isFixedOtpMatch =
-      this.fixedOtpCode != null && normalizedCode == this.fixedOtpCode;
+      this.fixedOtpCode != null &&
+      normalizedCode == this.fixedOtpCode &&
+      this.fixedOtpAllowedEmails.has(normalizedEmail);
     const isValid =
       isFixedOtpMatch || (await verifyOtpHash(normalizedCode, otp.code));
     if (!isValid) {
@@ -211,15 +214,24 @@ export class AuthService {
   }
 
   private get fixedOtpCode(): string | null {
-    if (env.NODE_ENV === 'production') {
-      return null;
-    }
-
     if (!env.DEV_FIXED_OTP_ENABLED) {
       return null;
     }
 
     return env.DEV_FIXED_OTP_CODE ?? FALLBACK_FIXED_OTP;
+  }
+
+  private get fixedOtpAllowedEmails(): Set<string> {
+    if (!env.DEV_FIXED_OTP_ENABLED) {
+      return new Set<string>();
+    }
+
+    return new Set(
+      (env.DEV_FIXED_OTP_ALLOWED_EMAILS ?? '')
+        .split(',')
+        .map((value) => value.trim().toLowerCase())
+        .filter(Boolean),
+    );
   }
 }
 

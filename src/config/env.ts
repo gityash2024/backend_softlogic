@@ -36,6 +36,7 @@ const envSchema = z.object({
   EMAIL_FROM_NAME: z.string().default('Softlogic Whiteboard'),
   DEV_FIXED_OTP_ENABLED: z.coerce.boolean().default(false),
   DEV_FIXED_OTP_CODE: z.string().regex(/^\d{4}$/).optional(),
+  DEV_FIXED_OTP_ALLOWED_EMAILS: z.string().optional(),
 
   // Cloudinary
   CLOUDINARY_CLOUD_NAME: z.string().optional(),
