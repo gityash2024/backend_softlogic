@@ -7,6 +7,9 @@ jest.mock('@/modules/auth/auth.repository', () => ({
   authRepository: {
     findUserByEmail: jest.fn(),
     findLatestOtp: jest.fn(),
+    countRecentOtps: jest.fn(),
+    invalidateUserOtps: jest.fn(),
+    createOtp: jest.fn(),
     incrementOtpAttempts: jest.fn(),
     markOtpUsed: jest.fn(),
     updateUser: jest.fn(),
@@ -24,6 +27,11 @@ jest.mock('@/shared/utils/jwt', () => ({
   verifyRefreshToken: jest.fn(),
 }));
 
+jest.mock('@/shared/utils/email', () => ({
+  sendEmail: jest.fn(),
+  getOtpEmailHtml: jest.fn(() => '<p>otp</p>'),
+}));
+
 jest.mock('@/shared/utils/otp', () => ({
   generateOtp: jest.fn(),
   hashOtp: jest.fn(),
@@ -34,12 +42,18 @@ import { authRepository } from '@/modules/auth/auth.repository';
 import { authService } from '@/modules/auth/auth.service';
 import { findUserContextById } from '@/modules/users/user-context.service';
 import { generateTokenPair } from '@/shared/utils/jwt';
-import { verifyOtp as verifyOtpHash } from '@/shared/utils/otp';
+import {
+  generateOtp,
+  hashOtp,
+  verifyOtp as verifyOtpHash,
+} from '@/shared/utils/otp';
 
 const mockedAuthRepository = jest.mocked(authRepository);
 const mockedFindUserContextById = jest.mocked(findUserContextById);
 const mockedGenerateTokenPair = jest.mocked(generateTokenPair);
+const mockedGenerateOtp = jest.mocked(generateOtp);
 const mockedVerifyOtpHash = jest.mocked(verifyOtpHash);
+const mockedHashOtp = jest.mocked(hashOtp);
 
 const activeUser = {
   id: 'user-1',
@@ -96,6 +110,7 @@ describe('AuthService fixed OTP allowlist', () => {
     DEV_FIXED_OTP_ENABLED: env.DEV_FIXED_OTP_ENABLED,
     DEV_FIXED_OTP_CODE: env.DEV_FIXED_OTP_CODE,
     DEV_FIXED_OTP_ALLOWED_EMAILS: env.DEV_FIXED_OTP_ALLOWED_EMAILS,
+    TESTING_RELAX_AUTH_LIMITS: env.TESTING_RELAX_AUTH_LIMITS,
   };
 
   beforeEach(() => {
@@ -105,9 +120,13 @@ describe('AuthService fixed OTP allowlist', () => {
     env.DEV_FIXED_OTP_ENABLED = true;
     env.DEV_FIXED_OTP_CODE = '1234';
     env.DEV_FIXED_OTP_ALLOWED_EMAILS = 'admin@softlogicwhiteboard.com';
+    env.TESTING_RELAX_AUTH_LIMITS = false;
 
     mockedAuthRepository.findUserByEmail.mockResolvedValue(activeUser as any);
     mockedAuthRepository.findLatestOtp.mockResolvedValue(activeOtp as any);
+    mockedAuthRepository.countRecentOtps.mockResolvedValue(0);
+    mockedAuthRepository.invalidateUserOtps.mockResolvedValue({} as any);
+    mockedAuthRepository.createOtp.mockResolvedValue({} as any);
     mockedAuthRepository.markOtpUsed.mockResolvedValue({} as any);
     mockedAuthRepository.updateUser.mockResolvedValue({} as any);
     mockedAuthRepository.findUserById.mockResolvedValue(activeUser as any);
@@ -117,6 +136,8 @@ describe('AuthService fixed OTP allowlist', () => {
       accessToken: 'access-token',
       refreshToken: 'refresh-token',
     });
+    mockedGenerateOtp.mockReturnValue('9876');
+    mockedHashOtp.mockResolvedValue('hashed-generated-otp');
     mockedVerifyOtpHash.mockResolvedValue(false);
   });
 
@@ -125,6 +146,7 @@ describe('AuthService fixed OTP allowlist', () => {
     env.DEV_FIXED_OTP_ENABLED = originalEnv.DEV_FIXED_OTP_ENABLED;
     env.DEV_FIXED_OTP_CODE = originalEnv.DEV_FIXED_OTP_CODE;
     env.DEV_FIXED_OTP_ALLOWED_EMAILS = originalEnv.DEV_FIXED_OTP_ALLOWED_EMAILS;
+    env.TESTING_RELAX_AUTH_LIMITS = originalEnv.TESTING_RELAX_AUTH_LIMITS;
   });
 
   it('accepts 1234 for an allowlisted production email with an active OTP request', async () => {
@@ -158,5 +180,37 @@ describe('AuthService fixed OTP allowlist', () => {
     ).rejects.toThrow(AuthError.otpInvalid());
 
     expect(mockedAuthRepository.markOtpUsed).not.toHaveBeenCalled();
+  });
+
+  it('skips OTP send throttling when testing auth limits are relaxed', async () => {
+    env.TESTING_RELAX_AUTH_LIMITS = true;
+    mockedAuthRepository.countRecentOtps.mockResolvedValue(99);
+
+    await expect(
+      authService.sendOtp('admin@softlogicwhiteboard.com'),
+    ).resolves.toEqual({ message: 'OTP sent successfully' });
+
+    expect(mockedAuthRepository.invalidateUserOtps).toHaveBeenCalled();
+    expect(mockedAuthRepository.createOtp).toHaveBeenCalled();
+  });
+
+  it('skips OTP attempt blocking when testing auth limits are relaxed', async () => {
+    env.TESTING_RELAX_AUTH_LIMITS = true;
+    mockedVerifyOtpHash.mockResolvedValue(true);
+    mockedAuthRepository.findLatestOtp.mockResolvedValue({
+      ...activeOtp,
+      attempts: 99,
+    } as any);
+
+    await expect(
+      authService.verifyOtp('admin@softlogicwhiteboard.com', '9876'),
+    ).resolves.toMatchObject({
+      tokens: {
+        accessToken: 'access-token',
+        refreshToken: 'refresh-token',
+      },
+    });
+
+    expect(mockedAuthRepository.markOtpUsed).toHaveBeenCalledWith('otp-1');
   });
 });

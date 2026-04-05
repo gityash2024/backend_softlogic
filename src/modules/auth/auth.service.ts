@@ -33,7 +33,7 @@ export class AuthService {
       OtpType.EMAIL_LOGIN,
       oneHourAgo,
     );
-    if (recentOtpCount >= MAX_OTP_SENDS_PER_HOUR) {
+    if (!this.shouldRelaxAuthLimits && recentOtpCount >= MAX_OTP_SENDS_PER_HOUR) {
       throw AuthError.rateLimited();
     }
 
@@ -82,7 +82,7 @@ export class AuthService {
       throw AuthError.otpExpired();
     }
 
-    if (otp.attempts >= MAX_OTP_ATTEMPTS) {
+    if (!this.shouldRelaxAuthLimits && otp.attempts >= MAX_OTP_ATTEMPTS) {
       throw AuthError.otpMaxAttempts();
     }
 
@@ -232,6 +232,10 @@ export class AuthService {
         .map((value) => value.trim().toLowerCase())
         .filter(Boolean),
     );
+  }
+
+  private get shouldRelaxAuthLimits(): boolean {
+    return env.TESTING_RELAX_AUTH_LIMITS;
   }
 }
 
