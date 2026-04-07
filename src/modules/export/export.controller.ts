@@ -8,11 +8,44 @@ import path from 'path';
 
 import { exportService } from './export.service';
 
+type ExportQualityInput = 'LOW' | 'MEDIUM' | 'HIGH';
+type ExportResolutionInput = 'STANDARD' | 'HD' | 'ULTRA';
+
+const normalizeExportQuality = (value: unknown): ExportQualityInput => {
+  if (typeof value !== 'string') {
+    return 'HIGH';
+  }
+
+  const normalized = value.trim().toUpperCase();
+  if (normalized === 'LOW' || normalized === 'MEDIUM' || normalized === 'HIGH') {
+    return normalized;
+  }
+
+  throw new AppError('Export quality must be LOW, MEDIUM, or HIGH', 400);
+};
+
+const normalizeExportResolution = (value: unknown): ExportResolutionInput => {
+  if (typeof value !== 'string') {
+    return 'HD';
+  }
+
+  const normalized = value.trim().toUpperCase();
+  if (normalized === 'STANDARD' || normalized === 'HD' || normalized === 'ULTRA') {
+    return normalized;
+  }
+
+  throw new AppError('Export resolution must be STANDARD, HD, or ULTRA', 400);
+};
+
 export class ExportController {
   async exportPdf(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const { canvasId, slideIds } = req.body;
       const canvas = await ensureCanvasAccess(canvasId, req.user!);
+      const options = {
+        quality: normalizeExportQuality(req.body.quality),
+        resolution: normalizeExportResolution(req.body.resolution),
+      };
       const exportRecord = await prisma.export.create({
         data: { canvasId, userId: req.user!.userId, format: 'PDF', status: 'PENDING' },
       });
@@ -20,6 +53,7 @@ export class ExportController {
         canvas,
         exportId: exportRecord.id,
         format: 'PDF',
+        options,
         requestedSlideIds: Array.isArray(slideIds) ? slideIds : undefined,
       });
       ApiResponse.created(res, completedExport, 'PDF export completed');
@@ -30,6 +64,10 @@ export class ExportController {
     try {
       const { canvasId, format = 'PNG', slideIds } = req.body;
       const normalizedFormat = typeof format === 'string' ? format.toUpperCase() : 'PNG';
+      const options = {
+        quality: normalizeExportQuality(req.body.quality),
+        resolution: normalizeExportResolution(req.body.resolution),
+      };
       if (!['PNG', 'JPG'].includes(normalizedFormat)) {
         throw new AppError('Only PNG and JPG exports are supported', 400);
       }
@@ -46,6 +84,7 @@ export class ExportController {
         canvas,
         exportId: exportRecord.id,
         format: normalizedFormat as 'PNG' | 'JPG',
+        options,
         requestedSlideIds: Array.isArray(slideIds) ? slideIds : undefined,
       });
       ApiResponse.created(res, completedExport, 'Image export completed');

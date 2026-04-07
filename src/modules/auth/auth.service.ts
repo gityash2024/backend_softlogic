@@ -14,6 +14,7 @@ import {
 
 import { authRepository } from './auth.repository';
 import { AuthResponse } from './auth.types';
+import { googleStrategy } from './strategies/google.strategy';
 
 const OTP_EXPIRY_MINUTES = 10;
 const MAX_OTP_ATTEMPTS = 3;
@@ -142,10 +143,76 @@ export class AuthService {
     idToken: string,
     ipAddress?: string,
   ): Promise<AuthResponse> {
-    throw new AppError(
-      'Google Sign-In not yet configured. Please use email/OTP login.',
-      501,
-    );
+    if (!idToken.trim()) {
+      throw new AppError('Google ID token is required', 400);
+    }
+
+    const googleUser = await googleStrategy.verifyIdToken(idToken);
+    const now = new Date();
+
+    let user = await authRepository.findUserByGoogleId(googleUser.sub);
+    if (user && user.status !== UserStatus.ACTIVE) {
+      throw AuthError.invalidCredentials();
+    }
+
+    if (!user) {
+      const existingUser = await authRepository.findUserByEmail(googleUser.email);
+      if (existingUser && existingUser.status !== UserStatus.ACTIVE) {
+        throw AuthError.invalidCredentials();
+      }
+
+      if (existingUser) {
+        user = await authRepository.updateUser(existingUser.id, {
+          googleId: googleUser.sub,
+          avatar: googleUser.picture ?? existingUser.avatar,
+          isEmailVerified: true,
+          lastLoginAt: now,
+          name: existingUser.name ?? googleUser.name,
+        });
+      } else {
+        user = await authRepository.createUser({
+          email: googleUser.email,
+          name: googleUser.name,
+          avatar: googleUser.picture,
+          googleId: googleUser.sub,
+          isEmailVerified: true,
+          lastLoginAt: now,
+        });
+      }
+    } else {
+      user = await authRepository.updateUser(user.id, {
+        avatar: googleUser.picture ?? user.avatar,
+        isEmailVerified: true,
+        lastLoginAt: now,
+        name: user.name ?? googleUser.name,
+      });
+    }
+
+    const tokenPayload = {
+      userId: user.id,
+      email: user.email,
+      role: user.role,
+      organizationId: user.primaryOrganizationId,
+    };
+    const tokens = generateTokenPair(tokenPayload);
+
+    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+    await authRepository.createSession({
+      userId: user.id,
+      refreshToken: tokens.refreshToken,
+      ipAddress,
+      expiresAt,
+    });
+
+    const safeUser = await findUserContextById(user.id);
+    if (!safeUser) {
+      throw AuthError.invalidCredentials();
+    }
+
+    return {
+      tokens,
+      user: safeUser,
+    };
   }
 
   async refreshToken(refreshToken: string): Promise<AuthResponse> {

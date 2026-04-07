@@ -148,6 +148,7 @@ model UserSettings {
   timezone        String   @default("UTC")
   autoTimezoneEnabled Boolean @default(false)
   performanceMode Boolean  @default(false)
+  performanceLevel PerformanceLevel @default(HIGH)
   profanityFilter Boolean  @default(true)
   customProfanityWords Json?
   defaultPenSize  Float    @default(4.0)
@@ -162,6 +163,12 @@ model UserSettings {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@map("user_settings")
+}
+
+enum PerformanceLevel {
+  LOW
+  MEDIUM
+  HIGH
 }
 
 model Canvas {

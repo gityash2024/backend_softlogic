@@ -12,7 +12,7 @@ export interface AuthResponse {
 
 export interface GoogleUserInfo {
   email: string;
-  name: string;
-  picture: string;
+  name: string | null;
+  picture: string | null;
   sub: string;
 }

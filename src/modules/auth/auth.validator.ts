@@ -1,11 +1,54 @@
 import { z } from 'zod';
 
+const disposableDomains = new Set([
+  'tempmail.com',
+  'throwaway.email',
+  'mailinator.com',
+  'guerrillamail.com',
+  'yopmail.com',
+  'sharklasers.com',
+  'trashmail.com',
+]);
+
+const authEmailRegex = /^[\w-\.]+@([\w-]+\.)+[\w-]{2,}$/;
+
+const authEmailSchema = z
+  .string()
+  .trim()
+  .toLowerCase()
+  .superRefine((email, ctx) => {
+    if (!email) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Email is required.',
+      });
+      return;
+    }
+
+    if (!authEmailRegex.test(email)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Enter a valid email address.',
+      });
+      return;
+    }
+
+    const emailParts = email.split('@');
+    const domain = emailParts[emailParts.length - 1];
+    if (disposableDomains.has(domain)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Disposable emails not allowed.',
+      });
+    }
+  });
+
 export const sendOtpSchema = z.object({
-  email: z.string().email('Invalid email address').toLowerCase().trim(),
+  email: authEmailSchema,
 });
 
 export const verifyOtpSchema = z.object({
-  email: z.string().email('Invalid email address').toLowerCase().trim(),
+  email: authEmailSchema,
   code: z.string().length(4, 'OTP must be 4 digits').regex(/^\d{4}$/, 'OTP must contain only digits'),
 });
 

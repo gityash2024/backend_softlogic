@@ -2,7 +2,11 @@ import { Request, Response, NextFunction } from 'express';
 import { prisma } from '@/config';
 import { ApiResponse } from '@/shared/utils/api-response';
 import { findUserContextById } from '@/modules/users/user-context.service';
-import { normalizeCustomProfanityWords } from './settings.service';
+import {
+  normalizeCustomProfanityWords,
+  normalizePerformanceLevel,
+  toLegacyPerformanceMode,
+} from './settings.service';
 
 const toSettingsResponse = (
   settings: {
@@ -12,13 +16,22 @@ const toSettingsResponse = (
     [key: string]: unknown;
   },
   subscription: unknown,
-) => ({
-  ...settings,
-  recentColors: Array.isArray(settings.recentColors) ? settings.recentColors : [],
-  favoriteColors: Array.isArray(settings.favoriteColors) ? settings.favoriteColors : [],
-  customProfanityWords: normalizeCustomProfanityWords(settings.customProfanityWords),
-  subscription,
-});
+) => {
+  const performanceLevel = normalizePerformanceLevel(
+    settings.performanceLevel,
+    settings.performanceMode as boolean | undefined,
+  );
+
+  return {
+    ...settings,
+    performanceLevel,
+    performanceMode: toLegacyPerformanceMode(performanceLevel),
+    recentColors: Array.isArray(settings.recentColors) ? settings.recentColors : [],
+    favoriteColors: Array.isArray(settings.favoriteColors) ? settings.favoriteColors : [],
+    customProfanityWords: normalizeCustomProfanityWords(settings.customProfanityWords),
+    subscription,
+  };
+};
 
 export class SettingsController {
   async getSettings(req: Request, res: Response, next: NextFunction): Promise<void> {
@@ -34,8 +47,17 @@ export class SettingsController {
 
   async updateSettings(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
+      const hasPerformanceOverride =
+        req.body.performanceLevel !== undefined || req.body.performanceMode !== undefined;
+      const performanceLevel = hasPerformanceOverride
+        ? normalizePerformanceLevel(req.body.performanceLevel, req.body.performanceMode)
+        : undefined;
       const data = {
         ...req.body,
+        performanceLevel,
+        performanceMode: performanceLevel === undefined
+          ? undefined
+          : toLegacyPerformanceMode(performanceLevel),
         customProfanityWords: req.body.customProfanityWords === undefined
           ? undefined
           : normalizeCustomProfanityWords(req.body.customProfanityWords),

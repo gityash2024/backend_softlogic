@@ -1,34 +1,33 @@
 import { Request, Response, NextFunction } from 'express';
-import { ApiResponse } from '@/shared/utils/api-response';
-import { env } from '@/config';
+import Filter from 'bad-words';
 
-// Simple profanity filter — using basic implementation for now
-// TODO: Replace with 'bad-words' package for comprehensive filtering
-const PROFANITY_LIST = ['badword1', 'badword2']; // Placeholder
+import { env } from '@/config';
+import { normalizeCustomProfanityWords } from '@/modules/settings/settings.service';
+import { ApiResponse } from '@/shared/utils/api-response';
 
 export class FilterController {
   async check(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const { text } = req.body;
+      const text = typeof req.body.text === 'string' ? req.body.text : '';
+      const customWords = normalizeCustomProfanityWords(req.body.customWords);
 
       if (!env.PROFANITY_ENABLED) {
         ApiResponse.success(res, { clean: true, filtered: text });
         return;
       }
 
-      let filtered = text;
-      let clean = true;
-
-      for (const word of PROFANITY_LIST) {
-        const regex = new RegExp(word, 'gi');
-        if (regex.test(filtered)) {
-          clean = false;
-          filtered = filtered.replace(regex, '*'.repeat(word.length));
-        }
+      const filter = new Filter();
+      if (customWords.length > 0) {
+        filter.addWords(...customWords);
       }
 
+      const clean = !filter.isProfane(text);
+      const filtered = clean ? text : filter.clean(text);
+
       ApiResponse.success(res, { clean, filtered });
-    } catch (error) { next(error); }
+    } catch (error) {
+      next(error);
+    }
   }
 }
 

@@ -24,7 +24,13 @@ interface ExportGenerationOptions {
   canvas: ExportCanvasSnapshot;
   exportId: string;
   format: 'PDF' | 'PNG' | 'JPG';
+  options: ExportRenderOptions;
   requestedSlideIds?: string[];
+}
+
+interface ExportRenderOptions {
+  quality: 'LOW' | 'MEDIUM' | 'HIGH';
+  resolution: 'STANDARD' | 'HD' | 'ULTRA';
 }
 
 interface GeneratedArtifact {
@@ -42,6 +48,7 @@ interface SlideSummary {
 interface RasterDocument {
   width: number;
   height: number;
+  jpegQuality: number;
   pngBytes: Buffer;
   jpegBytes: Buffer;
 }
@@ -116,7 +123,11 @@ export class ExportService {
         throw new AppError('At least one slide is required for export', 400);
       }
 
-      const raster = this.buildRasterDocument(options.canvas, slides);
+      const raster = this.buildRasterDocument(
+        options.canvas,
+        slides,
+        options.options,
+      );
       const artifact =
         options.format === 'PDF'
           ? await this.writePdfArtifact(options.exportId, options.canvas, raster)
@@ -194,9 +205,10 @@ export class ExportService {
   private buildRasterDocument(
     canvas: ExportCanvasSnapshot,
     slides: Slide[],
+    options: ExportRenderOptions,
   ): RasterDocument {
     const summaries = slides.map((slide) => this.toSlideSummary(slide));
-    const layout = this.resolveLayout(summaries.length);
+    const layout = this.resolveLayout(summaries.length, options.resolution);
     const png = new PNG({ width: layout.width, height: layout.height }) as RasterCanvas;
 
     this.fillRect(png, 0, 0, layout.width, layout.height, [248, 250, 252, 255]);
@@ -317,6 +329,7 @@ export class ExportService {
     });
 
     const pngBytes = PNG.sync.write(png);
+    const jpegQuality = this.resolveJpegQuality(options.quality);
     const jpegBytes = Buffer.from(
       jpeg.encode(
         {
@@ -324,13 +337,14 @@ export class ExportService {
           width: png.width,
           height: png.height,
         },
-        92,
+        jpegQuality,
       ).data,
     );
 
     return {
       width: png.width,
       height: png.height,
+      jpegQuality,
       pngBytes,
       jpegBytes,
     };
@@ -401,8 +415,11 @@ export class ExportService {
     return 0;
   }
 
-  private resolveLayout(slideCount: number) {
-    const width = 1600;
+  private resolveLayout(
+    slideCount: number,
+    resolution: ExportRenderOptions['resolution'],
+  ) {
+    const width = this.resolveCanvasWidth(resolution);
     const columns = slideCount > 1 ? 2 : 1;
     const gap = 32;
     const cardWidth = columns === 1 ? width - 96 : Math.floor((width - 96 - gap) / columns);
@@ -410,6 +427,30 @@ export class ExportService {
     const rows = Math.max(1, Math.ceil(slideCount / columns));
     const height = Math.max(900, 216 + rows * (cardHeight + gap));
     return { width, height, columns, gap, cardWidth, cardHeight };
+  }
+
+  private resolveCanvasWidth(resolution: ExportRenderOptions['resolution']): number {
+    switch (resolution) {
+      case 'STANDARD':
+        return 1200;
+      case 'ULTRA':
+        return 2200;
+      case 'HD':
+      default:
+        return 1600;
+    }
+  }
+
+  private resolveJpegQuality(quality: ExportRenderOptions['quality']): number {
+    switch (quality) {
+      case 'LOW':
+        return 72;
+      case 'MEDIUM':
+        return 84;
+      case 'HIGH':
+      default:
+        return 96;
+    }
   }
 
   private resolveCardPosition(

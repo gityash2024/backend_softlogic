@@ -8,6 +8,7 @@ const colorEntrySchema = z.union([
 export const updateSettingsSchema = z.object({
   timezone: z.string().trim().min(2).max(120).optional(),
   language: z.string().trim().min(2).max(20).optional(),
+  performanceLevel: z.enum(['LOW', 'MEDIUM', 'HIGH']).optional(),
   performanceMode: z.boolean().optional(),
   profanityFilter: z.boolean().optional(),
   autoTimezoneEnabled: z.boolean().optional(),
