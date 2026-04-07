@@ -170,14 +170,10 @@ export class AuthService {
           name: existingUser.name ?? googleUser.name,
         });
       } else {
-        user = await authRepository.createUser({
-          email: googleUser.email,
-          name: googleUser.name,
-          avatar: googleUser.picture,
-          googleId: googleUser.sub,
-          isEmailVerified: true,
-          lastLoginAt: now,
-        });
+        throw new AppError(
+          'This Google account is not invited. Contact your administrator.',
+          403,
+        );
       }
     } else {
       user = await authRepository.updateUser(user.id, {

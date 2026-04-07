@@ -23,6 +23,7 @@ Important local defaults:
 
 - `DATABASE_URL=postgresql://postgres:password@localhost:54320/softlogic_whiteboard`
 - `REDIS_URL=redis://localhost:6379`
+- `GOOGLE_CLIENT_ID=<same Google server/web client ID used by the Flutter app>`
 
 ### 3. Sync schema and seed admin
 
@@ -59,6 +60,13 @@ The backend also supports an optional fixed OTP fallback for testing:
 - restrict usage with `DEV_FIXED_OTP_ALLOWED_EMAILS=email1@example.com,email2@example.com`
 
 This fallback is intended to be temporary and should be limited to explicit test/admin emails. All other users must continue using the real emailed OTP.
+
+### Google sign-in behavior
+
+- Google sign-in is invite-only.
+- The backend only allows Google login for users who already exist in the database.
+- If an invited user signs in with the same email, the backend links their `googleId` and preserves the existing role.
+- Unknown Google emails are rejected and are not auto-created.
 
 ### Local smoke checks
 

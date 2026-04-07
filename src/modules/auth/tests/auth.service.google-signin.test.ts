@@ -31,6 +31,7 @@ jest.mock('@/shared/utils/jwt', () => ({
 import { authRepository } from '@/modules/auth/auth.repository';
 import { authService } from '@/modules/auth/auth.service';
 import { googleStrategy } from '@/modules/auth/strategies/google.strategy';
+import { AppError } from '@/shared/errors/AppError';
 import { findUserContextById } from '@/modules/users/user-context.service';
 import { generateTokenPair } from '@/shared/utils/jwt';
 
@@ -133,17 +134,112 @@ describe('AuthService Google Sign-In', () => {
     );
   });
 
-  it('creates a new user when the Google account email does not exist yet', async () => {
+  it('rejects sign-in when the Google account email is not invited', async () => {
     mockedAuthRepository.findUserByGoogleId.mockResolvedValue(null);
     mockedAuthRepository.findUserByEmail.mockResolvedValue(null);
-    mockedAuthRepository.createUser.mockResolvedValue({
-      id: 'user-2',
+    await expect(authService.googleSignIn('google-id-token')).rejects.toMatchObject({
+      message: 'This Google account is not invited. Contact your administrator.',
+      statusCode: 403,
+    } satisfies Partial<AppError>);
+
+    expect(mockedAuthRepository.createUser).not.toHaveBeenCalled();
+    expect(mockedAuthRepository.createSession).not.toHaveBeenCalled();
+  });
+
+  it('rejects sign-in for a disabled invited email account', async () => {
+    mockedAuthRepository.findUserByGoogleId.mockResolvedValue(null);
+    mockedAuthRepository.findUserByEmail.mockResolvedValue({
+      id: 'user-1',
       email: 'teacher@softlogicwhiteboard.com',
       name: 'Teacher Demo',
-      avatar: 'https://example.com/avatar.png',
+      avatar: null,
+      googleId: null,
+      isEmailVerified: false,
+      role: UserRole.TEACHER,
+      status: UserStatus.DISABLED,
+      timezone: 'UTC',
+      language: 'en',
+      invitedAt: new Date('2026-01-01T00:00:00.000Z'),
+      createdAt: new Date('2026-01-01T00:00:00.000Z'),
+      updatedAt: new Date('2026-01-01T00:00:00.000Z'),
+      deletedAt: null,
+      lastLoginAt: null,
+      primaryOrganizationId: null,
+    } as any);
+
+    await expect(authService.googleSignIn('google-id-token')).rejects.toMatchObject({
+      message: 'Invalid credentials',
+      statusCode: 401,
+    });
+
+    expect(mockedAuthRepository.updateUser).not.toHaveBeenCalled();
+    expect(mockedAuthRepository.createSession).not.toHaveBeenCalled();
+  });
+
+  it('rejects sign-in for a disabled Google-linked account', async () => {
+    mockedAuthRepository.findUserByGoogleId.mockResolvedValue({
+      id: 'user-1',
+      email: 'teacher@softlogicwhiteboard.com',
+      name: 'Teacher Demo',
+      avatar: null,
       googleId: 'google-sub-1',
       isEmailVerified: true,
-      role: UserRole.STUDENT,
+      role: UserRole.TEACHER,
+      status: UserStatus.DISABLED,
+      timezone: 'UTC',
+      language: 'en',
+      invitedAt: new Date('2026-01-01T00:00:00.000Z'),
+      createdAt: new Date('2026-01-01T00:00:00.000Z'),
+      updatedAt: new Date('2026-01-01T00:00:00.000Z'),
+      deletedAt: null,
+      lastLoginAt: null,
+      primaryOrganizationId: null,
+    } as any);
+
+    await expect(authService.googleSignIn('google-id-token')).rejects.toMatchObject({
+      message: 'Invalid credentials',
+      statusCode: 401,
+    });
+
+    expect(mockedAuthRepository.findUserByEmail).not.toHaveBeenCalled();
+    expect(mockedAuthRepository.updateUser).not.toHaveBeenCalled();
+    expect(mockedAuthRepository.createSession).not.toHaveBeenCalled();
+  });
+
+  it('preserves an existing admin role when linking a Google account', async () => {
+    mockedAuthRepository.findUserByGoogleId.mockResolvedValue(null);
+    mockedAuthRepository.findUserByEmail.mockResolvedValue({
+      id: 'admin-1',
+      email: 'admin@softlogicwhiteboard.com',
+      name: 'Admin Demo',
+      avatar: null,
+      googleId: null,
+      isEmailVerified: false,
+      role: UserRole.SUPER_ADMIN,
+      status: UserStatus.ACTIVE,
+      timezone: 'UTC',
+      language: 'en',
+      invitedAt: new Date('2026-01-01T00:00:00.000Z'),
+      createdAt: new Date('2026-01-01T00:00:00.000Z'),
+      updatedAt: new Date('2026-01-01T00:00:00.000Z'),
+      deletedAt: null,
+      lastLoginAt: null,
+      primaryOrganizationId: null,
+    } as any);
+    mockedGoogleStrategy.verifyIdToken.mockResolvedValue({
+      email: 'admin@softlogicwhiteboard.com',
+      name: 'Admin Demo',
+      picture: 'https://example.com/admin.png',
+      sub: 'google-admin-sub',
+    });
+    mockedAuthRepository.updateUser.mockResolvedValue({
+      id: 'admin-1',
+      email: 'admin@softlogicwhiteboard.com',
+      name: 'Admin Demo',
+      avatar: 'https://example.com/admin.png',
+      googleId: 'google-admin-sub',
+      isEmailVerified: true,
+      role: UserRole.SUPER_ADMIN,
       status: UserStatus.ACTIVE,
       timezone: 'UTC',
       language: 'en',
@@ -156,16 +252,20 @@ describe('AuthService Google Sign-In', () => {
     } as any);
     mockedFindUserContextById.mockResolvedValue({
       ...safeUserContext,
-      id: 'user-2',
+      id: 'admin-1',
+      email: 'admin@softlogicwhiteboard.com',
+      role: UserRole.SUPER_ADMIN,
+      name: 'Admin Demo',
+      avatar: 'https://example.com/admin.png',
     } as any);
 
     const result = await authService.googleSignIn('google-id-token');
 
-    expect(result.user.id).toBe('user-2');
-    expect(mockedAuthRepository.createUser).toHaveBeenCalledWith(
+    expect(result.user.role).toBe(UserRole.SUPER_ADMIN);
+    expect(mockedAuthRepository.updateUser).toHaveBeenCalledWith(
+      'admin-1',
       expect.objectContaining({
-        email: 'teacher@softlogicwhiteboard.com',
-        googleId: 'google-sub-1',
+        googleId: 'google-admin-sub',
         isEmailVerified: true,
       }),
     );
