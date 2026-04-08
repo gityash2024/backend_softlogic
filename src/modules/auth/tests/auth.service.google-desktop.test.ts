@@ -142,6 +142,7 @@ describe('AuthService desktop Google sign-in', () => {
 
     expect(result.statusCode).toBe(200);
     expect(result.html).toContain('You are signed in');
+    expect(result.html).toContain('You may now close this page.');
     expect(googleSignInSpy).toHaveBeenCalledWith('google-id-token', '127.0.0.1');
     expect(mockedAuthRepository.updateGoogleDesktopAuthAttempt).toHaveBeenCalledWith(
       'attempt-1',
@@ -213,7 +214,7 @@ describe('AuthService desktop Google sign-in', () => {
     });
 
     expect(result.statusCode).toBe(404);
-    expect(result.html).toContain('Sign-in request not found');
+    expect(result.html).toContain('We could not find this sign-in request');
     expect(mockedAuthRepository.updateGoogleDesktopAuthAttempt).not.toHaveBeenCalled();
   });
 });
