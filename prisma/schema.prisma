@@ -40,6 +40,7 @@ model User {
   auditLogs             AdminAuditLog[]          @relation("AuditActor")
   liveSessionsCreated   LiveSession[]            @relation("LiveSessionCreator")
   liveSessionParticipants LiveSessionParticipant[]
+  googleDesktopAuthAttempts GoogleDesktopAuthAttempt[]
 
   @@map("users")
 }
@@ -117,6 +118,32 @@ model Session {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@map("sessions")
+}
+
+model GoogleDesktopAuthAttempt {
+  id            String                        @id @default(uuid())
+  userId        String?
+  state         String                        @unique
+  status        GoogleDesktopAuthAttemptStatus @default(PENDING)
+  errorMessage  String?
+  sessionPayload Json?
+  expiresAt     DateTime
+  completedAt   DateTime?
+  consumedAt    DateTime?
+  createdAt     DateTime                      @default(now())
+  updatedAt     DateTime                      @updatedAt
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([status, expiresAt])
+  @@map("google_desktop_auth_attempts")
+}
+
+enum GoogleDesktopAuthAttemptStatus {
+  PENDING
+  COMPLETED
+  FAILED
+  EXPIRED
 }
 
 model Otp {

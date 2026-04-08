@@ -35,6 +35,54 @@ export class AuthController {
     }
   }
 
+  async startDesktopGoogleSignIn(
+    _req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
+    try {
+      const result = await authService.startDesktopGoogleSignIn();
+      ApiResponse.success(res, result, 'Desktop Google sign-in started');
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async googleDesktopCallback(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
+    try {
+      const result = await authService.handleDesktopGoogleCallback({
+        code: req.query.code?.toString(),
+        error: req.query.error?.toString(),
+        errorDescription: req.query.error_description?.toString(),
+        ipAddress: req.ip,
+        state: req.query.state?.toString(),
+      });
+
+      res.status(result.statusCode).type('html').send(result.html);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async getDesktopGoogleSignInStatus(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
+    try {
+      const result = await authService.getDesktopGoogleSignInStatus(
+        req.params.attemptId,
+      );
+      ApiResponse.success(res, result, 'Desktop Google sign-in status fetched');
+    } catch (error) {
+      next(error);
+    }
+  }
+
   async refreshToken(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const { refreshToken } = req.body;

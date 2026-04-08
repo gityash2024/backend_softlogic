@@ -1,5 +1,12 @@
 import { prisma } from '@/config';
-import { Prisma, User, Otp, Session, OtpType } from '@prisma/client';
+import {
+  GoogleDesktopAuthAttempt,
+  Otp,
+  OtpType,
+  Prisma,
+  Session,
+  User,
+} from '@prisma/client';
 
 export class AuthRepository {
   async findUserByEmail(email: string): Promise<User | null> {
@@ -93,6 +100,49 @@ export class AuthRepository {
     return prisma.otp.count({
       where: { userId, type, createdAt: { gte: since } },
     });
+  }
+
+  async createGoogleDesktopAuthAttempt(data: {
+    state: string;
+    expiresAt: Date;
+  }): Promise<GoogleDesktopAuthAttempt> {
+    return prisma.googleDesktopAuthAttempt.create({ data });
+  }
+
+  async findGoogleDesktopAuthAttemptById(
+    id: string,
+  ): Promise<GoogleDesktopAuthAttempt | null> {
+    return prisma.googleDesktopAuthAttempt.findUnique({ where: { id } });
+  }
+
+  async findGoogleDesktopAuthAttemptByState(
+    state: string,
+  ): Promise<GoogleDesktopAuthAttempt | null> {
+    return prisma.googleDesktopAuthAttempt.findUnique({ where: { state } });
+  }
+
+  async updateGoogleDesktopAuthAttempt(
+    id: string,
+    data: Prisma.GoogleDesktopAuthAttemptUpdateInput,
+  ): Promise<GoogleDesktopAuthAttempt> {
+    return prisma.googleDesktopAuthAttempt.update({
+      where: { id },
+      data,
+    });
+  }
+
+  async consumeGoogleDesktopAuthAttempt(id: string, consumedAt: Date): Promise<boolean> {
+    const result = await prisma.googleDesktopAuthAttempt.updateMany({
+      where: {
+        id,
+        consumedAt: null,
+      },
+      data: {
+        consumedAt,
+      },
+    });
+
+    return result.count > 0;
   }
 }
 

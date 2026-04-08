@@ -83,3 +83,20 @@ These validate the seeded invite-only auth path and backend whiteboard CRUD agai
 ```bash
 npm run local:db:down
 ```
+
+
+Current role hierarchy in the backend is:
+
+SUPER_ADMIN
+PARTNER_ADMIN
+CUSTOMER_ADMIN and ADMIN
+TEACHER
+STUDENT
+
+------------------------------------------------------------------------
+
+SUPER_ADMIN can manage everyone.
+PARTNER_ADMIN can manage CUSTOMER_ADMIN, TEACHER, and STUDENT.
+CUSTOMER_ADMIN can manage TEACHER and STUDENT.
+ADMIN currently behaves the same as CUSTOMER_ADMIN.
+TEACHER and STUDENT are not admin roles.

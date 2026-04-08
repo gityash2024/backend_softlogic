@@ -67,6 +67,36 @@ router.post('/google', validate(googleSignInSchema), authController.googleSignIn
 
 /**
  * @swagger
+ * /auth/google/desktop/start:
+ *   post:
+ *     summary: Start desktop Google OAuth flow
+ *     tags: [Auth]
+ */
+router.post('/google/desktop/start', authController.startDesktopGoogleSignIn);
+
+/**
+ * @swagger
+ * /auth/google/desktop/callback:
+ *   get:
+ *     summary: Handle desktop Google OAuth callback
+ *     tags: [Auth]
+ */
+router.get('/google/desktop/callback', authController.googleDesktopCallback);
+
+/**
+ * @swagger
+ * /auth/google/desktop/status/{attemptId}:
+ *   get:
+ *     summary: Poll desktop Google OAuth status
+ *     tags: [Auth]
+ */
+router.get(
+  '/google/desktop/status/:attemptId',
+  authController.getDesktopGoogleSignInStatus,
+);
+
+/**
+ * @swagger
  * /auth/refresh:
  *   post:
  *     summary: Refresh access token

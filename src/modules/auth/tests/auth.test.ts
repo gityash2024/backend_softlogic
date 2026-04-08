@@ -7,7 +7,10 @@ jest.mock('@/modules/auth/auth.service', () => ({
   authService: {
     sendOtp: jest.fn(),
     verifyOtp: jest.fn(),
-    signInWithGoogle: jest.fn(),
+    googleSignIn: jest.fn(),
+    startDesktopGoogleSignIn: jest.fn(),
+    handleDesktopGoogleCallback: jest.fn(),
+    getDesktopGoogleSignInStatus: jest.fn(),
     refreshToken: jest.fn(),
     logout: jest.fn(),
     resendOtp: jest.fn(),
@@ -96,6 +99,66 @@ describe('Auth Module', () => {
         'admin@softlogicwhiteboard.com',
         '1234',
         expect.any(String),
+      );
+    });
+  });
+
+  describe('POST /auth/google/desktop/start', () => {
+    it('starts the desktop Google OAuth flow', async () => {
+      mockedAuthService.startDesktopGoogleSignIn.mockResolvedValue({
+        attemptId: 'attempt-1',
+        authUrl: 'https://accounts.google.com/o/oauth2/v2/auth?state=abc',
+        expiresAt: '2026-04-07T12:00:00.000Z',
+        pollIntervalMs: 2000,
+      });
+
+      const response = await request(app).post('/api/v1/auth/google/desktop/start');
+
+      expect(response.status).toBe(200);
+      expect(response.body.success).toBe(true);
+      expect(response.body.data.attemptId).toBe('attempt-1');
+      expect(mockedAuthService.startDesktopGoogleSignIn).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('GET /auth/google/desktop/status/:attemptId', () => {
+    it('returns desktop Google OAuth status payload', async () => {
+      mockedAuthService.getDesktopGoogleSignInStatus.mockResolvedValue({
+        message: 'Waiting for Google sign-in to complete.',
+        status: 'pending',
+      });
+
+      const response = await request(app).get(
+        '/api/v1/auth/google/desktop/status/attempt-1',
+      );
+
+      expect(response.status).toBe(200);
+      expect(response.body.success).toBe(true);
+      expect(response.body.data.status).toBe('pending');
+      expect(mockedAuthService.getDesktopGoogleSignInStatus).toHaveBeenCalledWith(
+        'attempt-1',
+      );
+    });
+  });
+
+  describe('GET /auth/google/desktop/callback', () => {
+    it('renders the backend callback HTML page', async () => {
+      mockedAuthService.handleDesktopGoogleCallback.mockResolvedValue({
+        html: '<html><body>Signed in</body></html>',
+        statusCode: 200,
+      });
+
+      const response = await request(app).get(
+        '/api/v1/auth/google/desktop/callback?code=abc&state=state-1',
+      );
+
+      expect(response.status).toBe(200);
+      expect(response.text).toContain('Signed in');
+      expect(mockedAuthService.handleDesktopGoogleCallback).toHaveBeenCalledWith(
+        expect.objectContaining({
+          code: 'abc',
+          state: 'state-1',
+        }),
       );
     });
   });
