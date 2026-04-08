@@ -192,6 +192,7 @@ describe('AuthService fixed OTP allowlist', () => {
 
     expect(mockedAuthRepository.invalidateUserOtps).toHaveBeenCalled();
     expect(mockedAuthRepository.createOtp).toHaveBeenCalled();
+    expect(mockedHashOtp).toHaveBeenCalledWith('1234');
   });
 
   it('skips OTP attempt blocking when testing auth limits are relaxed', async () => {
@@ -212,5 +213,35 @@ describe('AuthService fixed OTP allowlist', () => {
     });
 
     expect(mockedAuthRepository.markOtpUsed).toHaveBeenCalledWith('otp-1');
+  });
+
+  it('accepts 1234 for any active email when testing auth limits are relaxed', async () => {
+    env.TESTING_RELAX_AUTH_LIMITS = true;
+    env.DEV_FIXED_OTP_ALLOWED_EMAILS = '';
+
+    await expect(
+      authService.verifyOtp('qa@softlogicwhiteboard.com', '1234'),
+    ).resolves.toMatchObject({
+      tokens: {
+        accessToken: 'access-token',
+        refreshToken: 'refresh-token',
+      },
+    });
+
+    expect(mockedAuthRepository.markOtpUsed).toHaveBeenCalledWith('otp-1');
+    expect(mockedVerifyOtpHash).not.toHaveBeenCalled();
+  });
+
+  it('does not consume the OTP when session payload construction fails', async () => {
+    env.TESTING_RELAX_AUTH_LIMITS = true;
+    mockedVerifyOtpHash.mockResolvedValue(true);
+    mockedFindUserContextById.mockResolvedValue(null as any);
+
+    await expect(
+      authService.verifyOtp('admin@softlogicwhiteboard.com', '9876'),
+    ).rejects.toThrow(AuthError.invalidCredentials());
+
+    expect(mockedAuthRepository.createSession).toHaveBeenCalled();
+    expect(mockedAuthRepository.markOtpUsed).not.toHaveBeenCalled();
   });
 });

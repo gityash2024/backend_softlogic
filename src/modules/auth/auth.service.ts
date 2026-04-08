@@ -71,7 +71,11 @@ export class AuthService {
 
     await authRepository.invalidateUserOtps(user.id, OtpType.EMAIL_LOGIN);
 
-    const otpCode = generateOtp();
+    const normalizedEmail = email.trim().toLowerCase();
+    const otpCode =
+      this.shouldUseFixedOtpForEmail(normalizedEmail) && this.fixedOtpCode != null
+        ? this.fixedOtpCode
+        : generateOtp();
     const hashedOtp = await hashOtp(otpCode);
     const expiresAt = new Date(Date.now() + OTP_EXPIRY_MINUTES * 60 * 1000);
 
@@ -123,15 +127,13 @@ export class AuthService {
     const isFixedOtpMatch =
       this.fixedOtpCode != null &&
       normalizedCode == this.fixedOtpCode &&
-      this.fixedOtpAllowedEmails.has(normalizedEmail);
+      this.shouldUseFixedOtpForEmail(normalizedEmail);
     const isValid =
       isFixedOtpMatch || (await verifyOtpHash(normalizedCode, otp.code));
     if (!isValid) {
       await authRepository.incrementOtpAttempts(otp.id);
       throw AuthError.otpInvalid();
     }
-
-    await authRepository.markOtpUsed(otp.id);
 
     await authRepository.updateUser(user.id, {
       isEmailVerified: true,
@@ -163,6 +165,8 @@ export class AuthService {
     if (!safeUser) {
       throw AuthError.invalidCredentials();
     }
+
+    await authRepository.markOtpUsed(otp.id);
 
     return {
       tokens,
@@ -526,6 +530,18 @@ export class AuthService {
 
   private get shouldRelaxAuthLimits(): boolean {
     return env.TESTING_RELAX_AUTH_LIMITS;
+  }
+
+  private shouldUseFixedOtpForEmail(email: string): boolean {
+    if (this.fixedOtpCode == null) {
+      return false;
+    }
+
+    if (this.shouldRelaxAuthLimits) {
+      return true;
+    }
+
+    return this.fixedOtpAllowedEmails.has(email);
   }
 
   private ensureGoogleDesktopAuthConfigured(): void {

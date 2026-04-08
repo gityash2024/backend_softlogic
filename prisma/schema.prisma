@@ -65,6 +65,8 @@ model Organization {
   slug               String                 @unique
   kind               OrganizationKind       @default(CUSTOMER)
   status             OrganizationStatus     @default(ACTIVE)
+  logoUrl            String?
+  logoPublicId       String?
   parentOrganizationId String?
   createdAt          DateTime               @default(now())
   updatedAt          DateTime               @updatedAt

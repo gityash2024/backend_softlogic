@@ -42,6 +42,7 @@ export interface OrganizationSummary {
   id: string;
   name: string;
   slug: string;
+  logoUrl: string | null;
   kind: OrganizationKind;
   status: OrganizationStatus;
   parentOrganizationId: string | null;
@@ -69,6 +70,7 @@ const toOrganizationSummary = (organization: Organization): OrganizationSummary 
   id: organization.id,
   name: organization.name,
   slug: organization.slug,
+  logoUrl: organization.logoUrl ?? null,
   kind: organization.kind,
   status: organization.status,
   parentOrganizationId: organization.parentOrganizationId,

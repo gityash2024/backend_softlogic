@@ -21,6 +21,37 @@ export class AdminController {
     }
   }
 
+  async updateOrganization(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const organization = await adminService.updateOrganization(req.user!, req.params.id, req.body);
+      ApiResponse.success(res, organization, 'Organization updated');
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async uploadOrganizationLogo(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const organization = await adminService.uploadOrganizationLogo(
+        req.user!,
+        req.params.id,
+        req.file,
+      );
+      ApiResponse.success(res, organization, 'Organization logo updated');
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async removeOrganizationLogo(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const organization = await adminService.removeOrganizationLogo(req.user!, req.params.id);
+      ApiResponse.success(res, organization, 'Organization logo removed');
+    } catch (error) {
+      next(error);
+    }
+  }
+
   async listUsers(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const users = await adminService.listUsers(req.user!);

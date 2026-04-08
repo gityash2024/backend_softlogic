@@ -9,6 +9,14 @@ export const createOrganizationSchema = z.object({
   parentOrganizationId: z.string().uuid().optional().nullable(),
 });
 
+export const updateOrganizationSchema = z.object({
+  name: z.string().min(2).max(120).optional(),
+  slug: z.string().min(2).max(120).optional(),
+  status: z.nativeEnum(OrganizationStatus).optional(),
+}).refine((value) => Object.keys(value).length > 0, {
+  message: 'At least one field is required',
+});
+
 export const createUserSchema = z.object({
   email: z.string().email(),
   name: z.string().min(2).max(120).optional(),

@@ -1,5 +1,6 @@
 import {
   OrganizationKind,
+  OrganizationStatus,
   Prisma,
   SubscriptionStatus,
   UserRole,
@@ -14,12 +15,19 @@ import {
 } from '@/shared/utils/access-control';
 import { AppError } from '@/shared/errors/AppError';
 import { findUserContextById } from '@/modules/users/user-context.service';
+import { deleteImageAsset, uploadImageBuffer } from '@/shared/services/cloudinary.service';
 
 interface CreateOrganizationInput {
   name: string;
   slug?: string;
   kind?: OrganizationKind;
   parentOrganizationId?: string | null;
+}
+
+interface UpdateOrganizationInput {
+  name?: string;
+  slug?: string;
+  status?: OrganizationStatus;
 }
 
 interface CreateUserInput {
@@ -70,6 +78,21 @@ const slugify = (value: string): string =>
     .slice(0, 80) || `org-${Date.now()}`;
 
 export class AdminService {
+  private readonly organizationInclude = {
+    parentOrganization: true,
+    subscriptions: {
+      orderBy: { updatedAt: 'desc' as const },
+      take: 1,
+    },
+    _count: {
+      select: {
+        memberships: true,
+        canvases: true,
+        subscriptions: true,
+      },
+    },
+  } satisfies Prisma.OrganizationInclude;
+
   async listOrganizations(actor: AuthenticatedUserLike) {
     const managedOrganizationIds = await getManagedOrganizationIds(actor);
 
@@ -81,20 +104,7 @@ export class AdminService {
     return prisma.organization.findMany({
       where,
       orderBy: { name: 'asc' },
-      include: {
-        parentOrganization: true,
-        subscriptions: {
-          orderBy: { updatedAt: 'desc' },
-          take: 1,
-        },
-        _count: {
-          select: {
-            memberships: true,
-            canvases: true,
-            subscriptions: true,
-          },
-        },
-      },
+      include: this.organizationInclude,
     });
   }
 
@@ -124,24 +134,137 @@ export class AdminService {
         kind,
         parentOrganizationId,
       },
-      include: {
-        parentOrganization: true,
-        subscriptions: {
-          orderBy: { updatedAt: 'desc' },
-          take: 1,
-        },
-        _count: {
-          select: {
-            memberships: true,
-            canvases: true,
-            subscriptions: true,
-          },
-        },
-      },
+      include: this.organizationInclude,
     });
 
     await this.logAudit(actor.userId, 'organization.create', 'organization', organization.id, `Created organization ${organization.name}`);
     return organization;
+  }
+
+  async updateOrganization(
+    actor: AuthenticatedUserLike,
+    organizationId: string,
+    input: UpdateOrganizationInput,
+  ) {
+    await ensureOrganizationManaged(organizationId, actor);
+
+    const existing = await prisma.organization.findUnique({
+      where: { id: organizationId },
+      select: { id: true, name: true },
+    });
+    if (!existing) {
+      throw new AppError('Organization not found', 404);
+    }
+
+    const organization = await prisma.organization.update({
+      where: { id: organizationId },
+      data: {
+        name: input.name,
+        slug: input.slug ? slugify(input.slug) : undefined,
+        status: input.status,
+      },
+      include: this.organizationInclude,
+    });
+
+    await this.logAudit(
+      actor.userId,
+      'organization.update',
+      'organization',
+      organization.id,
+      `Updated organization ${organization.name}`,
+    );
+    return organization;
+  }
+
+  async uploadOrganizationLogo(
+    actor: AuthenticatedUserLike,
+    organizationId: string,
+    file?: Express.Multer.File,
+  ) {
+    await ensureOrganizationManaged(organizationId, actor);
+
+    if (!file) {
+      throw new AppError('Organization logo file is required.', 400);
+    }
+
+    const organization = await prisma.organization.findUnique({
+      where: { id: organizationId },
+      select: {
+        id: true,
+        name: true,
+        logoPublicId: true,
+      },
+    });
+    if (!organization) {
+      throw new AppError('Organization not found', 404);
+    }
+
+    const upload = await uploadImageBuffer({
+      buffer: file.buffer,
+      filename: file.originalname,
+      folder: `softlogic/organizations/${organizationId}`,
+    });
+
+    if (organization.logoPublicId) {
+      await deleteImageAsset(organization.logoPublicId);
+    }
+
+    const updated = await prisma.organization.update({
+      where: { id: organizationId },
+      data: {
+        logoUrl: upload.url,
+        logoPublicId: upload.publicId,
+      },
+      include: this.organizationInclude,
+    });
+
+    await this.logAudit(
+      actor.userId,
+      'organization.logo.upload',
+      'organization',
+      updated.id,
+      `Updated organization logo for ${updated.name}`,
+    );
+    return updated;
+  }
+
+  async removeOrganizationLogo(
+    actor: AuthenticatedUserLike,
+    organizationId: string,
+  ) {
+    await ensureOrganizationManaged(organizationId, actor);
+
+    const organization = await prisma.organization.findUnique({
+      where: { id: organizationId },
+      select: {
+        id: true,
+        name: true,
+        logoPublicId: true,
+      },
+    });
+    if (!organization) {
+      throw new AppError('Organization not found', 404);
+    }
+
+    await deleteImageAsset(organization.logoPublicId);
+
+    const updated = await prisma.organization.update({
+      where: { id: organizationId },
+      data: {
+        logoUrl: null,
+        logoPublicId: null,
+      },
+      include: this.organizationInclude,
+    });
+
+    await this.logAudit(
+      actor.userId,
+      'organization.logo.remove',
+      'organization',
+      updated.id,
+      `Removed organization logo for ${updated.name}`,
+    );
+    return updated;
   }
 
   async listUsers(actor: AuthenticatedUserLike) {
