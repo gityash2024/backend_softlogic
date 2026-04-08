@@ -6,6 +6,8 @@ import {
   UserStatus,
 } from '@prisma/client';
 import { randomUUID } from 'crypto';
+import { existsSync, readFileSync } from 'fs';
+import { resolve } from 'path';
 
 import { env } from '@/config';
 import { findUserContextById } from '@/modules/users/user-context.service';
@@ -35,6 +37,7 @@ const GOOGLE_DESKTOP_AUTH_EXPIRY_MINUTES = 10;
 const GOOGLE_DESKTOP_POLL_INTERVAL_MS = 2000;
 const GOOGLE_AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
 const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
+let desktopGoogleCallbackLogoDataUri: string | null = null;
 
 interface GoogleTokenExchangeResponse {
   error?: string;
@@ -270,12 +273,6 @@ export class AuthService {
     const { code, error, errorDescription, ipAddress, state } = params;
     if (!state?.trim()) {
       return this.renderDesktopGoogleCallbackPage({
-        badge: 'Request issue',
-        nextSteps: [
-          'Return to the SoftLogic desktop app.',
-          'Start Google sign-in again.',
-        ],
-        supportText: '',
         message: 'This sign-in request is missing its verification state.',
         statusCode: 400,
         variant: 'warning',
@@ -288,12 +285,6 @@ export class AuthService {
     );
     if (!attempt) {
       return this.renderDesktopGoogleCallbackPage({
-        badge: 'Request not found',
-        nextSteps: [
-          'Return to the SoftLogic desktop app.',
-          'Start Google sign-in again.',
-        ],
-        supportText: '',
         message: 'This sign-in request could not be found.',
         statusCode: 404,
         variant: 'warning',
@@ -304,12 +295,6 @@ export class AuthService {
     const expiredAttempt = await this.expireAttemptIfNeeded(attempt);
     if (expiredAttempt) {
       return this.renderDesktopGoogleCallbackPage({
-        badge: 'Request expired',
-        nextSteps: [
-          'Return to the SoftLogic desktop app.',
-          'Start Google sign-in again.',
-        ],
-        supportText: '',
         message: 'This sign-in request has expired.',
         statusCode: 410,
         variant: 'warning',
@@ -326,12 +311,6 @@ export class AuthService {
         status: GoogleDesktopAuthAttemptStatus.FAILED,
       });
       return this.renderDesktopGoogleCallbackPage({
-        badge: 'Cancelled',
-        nextSteps: [
-          'Return to the SoftLogic desktop app.',
-          'Use Google sign-in again when you are ready.',
-        ],
-        supportText: '',
         message,
         statusCode: 400,
         variant: 'warning',
@@ -345,12 +324,6 @@ export class AuthService {
         status: GoogleDesktopAuthAttemptStatus.FAILED,
       });
       return this.renderDesktopGoogleCallbackPage({
-        badge: 'Missing authorization',
-        nextSteps: [
-          'Return to the SoftLogic desktop app.',
-          'Try Google sign-in again.',
-        ],
-        supportText: '',
         message: 'Google did not return an authorization code.',
         statusCode: 400,
         variant: 'error',
@@ -371,12 +344,6 @@ export class AuthService {
       });
 
       return this.renderDesktopGoogleCallbackPage({
-        badge: 'Signed in',
-        nextSteps: [
-          'Return to the SoftLogic desktop app.',
-          'You can close this tab.',
-        ],
-        supportText: '',
         message: 'Google sign-in is complete.',
         statusCode: 200,
         variant: 'success',
@@ -390,12 +357,6 @@ export class AuthService {
       });
 
       return this.renderDesktopGoogleCallbackPage({
-        badge: 'Sign-in failed',
-        nextSteps: [
-          'Return to the SoftLogic desktop app.',
-          'Try Google sign-in again.',
-        ],
-        supportText: '',
         message,
         statusCode: error instanceof AppError ? error.statusCode : 500,
         variant: 'error',
@@ -670,68 +631,28 @@ export class AuthService {
   }
 
   private renderDesktopGoogleCallbackPage(params: {
-    badge: string;
     message: string;
-    nextSteps: string[];
     statusCode: number;
-    supportText: string;
     title: string;
     variant: DesktopGoogleCallbackVariant;
   }): DesktopGoogleCallbackPageResponse {
     const classNames = {
       success: {
-        accent: '#0F9D58',
-        badgeBackground: 'rgba(15, 157, 88, 0.12)',
-        badgeText: '#0B7A43',
-        halo: 'rgba(15, 157, 88, 0.12)',
-        cardBorder: 'rgba(15, 157, 88, 0.12)',
-        iconBackground:
-          'linear-gradient(180deg, rgba(15, 157, 88, 0.1), rgba(66, 133, 244, 0.06))',
-        iconStroke: '#0F9D58',
+        cardBorder: 'rgba(15, 157, 88, 0.16)',
       },
       warning: {
-        accent: '#F59E0B',
-        badgeBackground: 'rgba(245, 158, 11, 0.14)',
-        badgeText: '#B76800',
-        halo: 'rgba(245, 158, 11, 0.12)',
-        cardBorder: 'rgba(245, 158, 11, 0.14)',
-        iconBackground:
-          'linear-gradient(180deg, rgba(245, 158, 11, 0.1), rgba(251, 191, 36, 0.06))',
-        iconStroke: '#D97706',
+        cardBorder: 'rgba(245, 158, 11, 0.18)',
       },
       error: {
-        accent: '#D83A3A',
-        badgeBackground: 'rgba(216, 58, 58, 0.14)',
-        badgeText: '#B42318',
-        halo: 'rgba(216, 58, 58, 0.12)',
-        cardBorder: 'rgba(216, 58, 58, 0.14)',
-        iconBackground:
-          'linear-gradient(180deg, rgba(216, 58, 58, 0.1), rgba(242, 113, 113, 0.06))',
-        iconStroke: '#D83A3A',
+        cardBorder: 'rgba(216, 58, 58, 0.16)',
       },
     }[params.variant];
     const escapedTitle = this.escapeHtml(params.title);
     const escapedMessage = this.escapeHtml(params.message);
-    const escapedBadge = this.escapeHtml(params.badge);
-    const escapedSupportText = this.escapeHtml(params.supportText);
-    const nextStepsHtml = params.nextSteps
-      .map((step, index) => {
-        const escapedStep = this.escapeHtml(step);
-        return `<li><span class="step-index">0${index + 1}</span><span>${escapedStep}</span></li>`;
-      })
-      .join('');
-    const nextStepsSection = nextStepsHtml
-      ? `
-          <div class="panel">
-            <p class="panel-title">Next</p>
-            <ol class="steps">${nextStepsHtml}</ol>
-          </div>
-        `
+    const logoDataUri = this.getDesktopGoogleCallbackLogoDataUri();
+    const brandSection = logoDataUri
+      ? `<div class="brand"><img src="${logoDataUri}" alt="SoftLogic" class="brand-logo" /></div>`
       : '';
-    const supportSection = params.supportText.trim()
-      ? `<p class="support">${escapedSupportText}</p>`
-      : '';
-    const icon = this.renderDesktopGoogleCallbackIcon(params.variant);
     const html = `<!DOCTYPE html>
 <html lang="en">
   <head>
@@ -746,217 +667,69 @@ export class AuthService {
         margin: 0;
         min-height: 100vh;
         font-family: "Segoe UI", Arial, sans-serif;
-        background:
-          radial-gradient(circle at top left, rgba(68, 132, 255, 0.22), transparent 26%),
-          linear-gradient(160deg, #0a367f 0%, #1149b5 58%, #0a2d73 100%);
+        background: #f5f7fb;
         display: flex;
         align-items: center;
         justify-content: center;
-        padding: 24px 16px;
+        padding: 20px 16px;
         color: #111827;
       }
       .shell {
-        width: min(100%, 560px);
+        width: min(100%, 460px);
+      }
+      .card {
+        width: 100%;
+        background: #ffffff;
+        border-radius: 24px;
+        padding: 28px 24px 22px;
+        border: 1px solid ${classNames.cardBorder};
+        box-shadow: 0 16px 40px rgba(15, 23, 42, 0.08);
+        text-align: center;
       }
       .brand {
         display: inline-flex;
         align-items: center;
-        gap: 12px;
+        justify-content: center;
+        background: #1149b5;
+        border-radius: 999px;
+        padding: 12px 20px;
         margin-bottom: 18px;
-        color: #ffffff;
       }
-      .brand-mark {
-        width: 42px;
-        height: 42px;
-        border-radius: 14px;
-        background: rgba(255, 255, 255, 0.1);
-        border: 1px solid rgba(255, 255, 255, 0.18);
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        backdrop-filter: blur(14px);
-      }
-      .brand-mark svg {
-        width: 24px;
+      .brand-logo {
+        display: block;
         height: 24px;
-      }
-      .brand-copy {
-        display: flex;
-        flex-direction: column;
-        gap: 2px;
-      }
-      .brand-copy strong {
-        font-size: 18px;
-        font-weight: 700;
-        letter-spacing: -0.02em;
-      }
-      .brand-copy span {
-        font-size: 11px;
-        color: rgba(226, 232, 245, 0.8);
-        letter-spacing: 0.12em;
-        text-transform: uppercase;
-      }
-      .card {
-        position: relative;
-        overflow: hidden;
-        width: 100%;
-        background: rgba(255, 255, 255, 0.96);
-        border-radius: 28px;
-        padding: 28px 28px 24px;
-        border: 1px solid ${classNames.cardBorder};
-        box-shadow:
-          0 24px 60px rgba(4, 25, 68, 0.22),
-          0 4px 18px rgba(4, 25, 68, 0.08);
-        backdrop-filter: blur(18px);
-      }
-      .card::before {
-        content: "";
-        position: absolute;
-        top: -100px;
-        right: -80px;
-        width: 220px;
-        height: 220px;
-        border-radius: 999px;
-        background: ${classNames.halo};
-        filter: blur(4px);
-      }
-      .card-inner {
-        position: relative;
-        z-index: 1;
-        text-align: center;
-      }
-      .badge {
-        display: inline-flex;
-        align-items: center;
-        gap: 8px;
-        padding: 7px 12px;
-        border-radius: 999px;
-        background: ${classNames.badgeBackground};
-        color: ${classNames.badgeText};
-        font-size: 11px;
-        font-weight: 700;
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
-      }
-      .badge::before {
-        content: "";
-        width: 8px;
-        height: 8px;
-        border-radius: 999px;
-        background: ${classNames.accent};
-      }
-      .status-grid {
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        gap: 16px;
-        margin-top: 20px;
-      }
-      .status-icon {
-        width: 72px;
-        height: 72px;
-        border-radius: 22px;
-        background: ${classNames.iconBackground};
-        border: 1px solid rgba(17, 24, 39, 0.06);
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.75);
-      }
-      .status-icon svg {
-        width: 36px;
-        height: 36px;
-        stroke: ${classNames.iconStroke};
-        fill: none;
-        stroke-linecap: round;
-        stroke-linejoin: round;
-        stroke-width: 2.2;
+        width: auto;
       }
       h2 {
         margin: 0;
-        font-size: clamp(28px, 4vw, 38px);
-        line-height: 1.08;
+        font-size: clamp(28px, 5vw, 36px);
+        line-height: 1.1;
         letter-spacing: -0.04em;
         font-weight: 700;
         color: #101828;
       }
       .lead {
-        margin: 14px auto 0;
+        margin: 12px auto 0;
         color: #445469;
-        font-size: 16px;
-        line-height: 1.6;
-        max-width: 420px;
-      }
-      .panel {
-        margin-top: 22px;
-        padding: 16px;
-        border-radius: 18px;
-        background: rgba(244, 247, 252, 0.96);
-        border: 1px solid rgba(217, 226, 240, 0.8);
-        text-align: left;
-      }
-      .panel-title {
-        margin: 0 0 12px;
-        font-size: 12px;
-        font-weight: 700;
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
-        color: #667085;
-      }
-      .steps {
-        list-style: none;
-        padding: 0;
-        margin: 0;
-        display: grid;
-        gap: 12px;
-      }
-      .steps li {
-        display: grid;
-        grid-template-columns: auto 1fr;
-        gap: 12px;
-        align-items: start;
-        color: #344054;
-        font-size: 14px;
-        line-height: 1.5;
-      }
-      .step-index {
-        width: 26px;
-        height: 26px;
-        border-radius: 999px;
-        background: rgba(17, 73, 181, 0.1);
-        color: #1149b5;
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 11px;
-        font-weight: 800;
-        letter-spacing: 0.08em;
-      }
-      .support {
-        margin-top: 18px;
-        color: #667085;
-        font-size: 14px;
+        font-size: 15px;
         line-height: 1.55;
+        max-width: 320px;
       }
       .footer-note {
-        margin-top: 16px;
+        margin-top: 18px;
         color: #98a2b3;
         font-size: 13px;
         line-height: 1.5;
       }
       @media (max-width: 640px) {
         body {
-          padding: 18px 12px;
+          padding: 16px 12px;
         }
         .card {
-          padding: 22px 18px 20px;
+          padding: 24px 18px 20px;
         }
-        .brand {
-          margin-bottom: 14px;
-        }
-        .status-icon {
-          width: 64px;
-          height: 64px;
+        .brand-logo {
+          height: 22px;
         }
         h2 {
           font-size: 26px;
@@ -969,36 +742,11 @@ export class AuthService {
   </head>
   <body>
     <main class="shell">
-      <div class="brand" aria-hidden="true">
-        <div class="brand-mark">
-          <svg viewBox="0 0 48 48" role="presentation">
-            <circle cx="24" cy="14" r="6" stroke="rgba(255,255,255,0.95)" />
-            <circle cx="12" cy="24" r="5" stroke="rgba(255,255,255,0.85)" />
-            <circle cx="36" cy="24" r="5" stroke="rgba(255,255,255,0.85)" />
-            <path d="M18 33c0-3.5 2.7-6 6-6s6 2.5 6 6" />
-            <path d="M6.5 34c0-3.2 2.3-5.5 5.5-5.5 1.8 0 3.4.7 4.5 2" />
-            <path d="M31.5 30.5c1.1-1.3 2.7-2 4.5-2 3.2 0 5.5 2.3 5.5 5.5" />
-          </svg>
-        </div>
-        <div class="brand-copy">
-          <strong>SoftLogic</strong>
-          <span>Desktop sign-in</span>
-        </div>
-      </div>
       <section class="card">
-        <div class="card-inner">
-          <div class="badge">${escapedBadge}</div>
-          <div class="status-grid">
-            <div class="status-icon" aria-hidden="true">${icon}</div>
-            <h2>${escapedTitle}</h2>
-          </div>
-          <p class="lead">${escapedMessage}</p>
-          ${nextStepsSection}
-          ${supportSection}
-          <p class="footer-note">
-            You may now close this page.
-          </p>
-        </div>
+        ${brandSection}
+        <h2>${escapedTitle}</h2>
+        <p class="lead">${escapedMessage}</p>
+        <p class="footer-note">You may now close this page.</p>
       </section>
     </main>
   </body>
@@ -1008,6 +756,26 @@ export class AuthService {
       html,
       statusCode: params.statusCode,
     };
+  }
+
+  private getDesktopGoogleCallbackLogoDataUri(): string {
+    if (desktopGoogleCallbackLogoDataUri) {
+      return desktopGoogleCallbackLogoDataUri;
+    }
+
+    const candidatePaths = [
+      resolve(process.cwd(), 'src', 'modules', 'auth', 'assets', 'softlogic-logo.png'),
+      resolve(__dirname, 'assets', 'softlogic-logo.png'),
+    ];
+
+    for (const candidatePath of candidatePaths) {
+      if (existsSync(candidatePath)) {
+        desktopGoogleCallbackLogoDataUri = `data:image/png;base64,${readFileSync(candidatePath).toString('base64')}`;
+        return desktopGoogleCallbackLogoDataUri;
+      }
+    }
+
+    return '';
   }
 
   private escapeHtml(value: string): string {

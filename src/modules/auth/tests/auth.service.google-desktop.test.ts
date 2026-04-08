@@ -141,8 +141,11 @@ describe('AuthService desktop Google sign-in', () => {
     });
 
     expect(result.statusCode).toBe(200);
+    expect(result.html).toContain('data:image/png;base64,');
     expect(result.html).toContain('You are signed in');
     expect(result.html).toContain('You may now close this page.');
+    expect(result.html).not.toContain('Return to the SoftLogic desktop app.');
+    expect(result.html).not.toContain('You can close this tab.');
     expect(googleSignInSpy).toHaveBeenCalledWith('google-id-token', '127.0.0.1');
     expect(mockedAuthRepository.updateGoogleDesktopAuthAttempt).toHaveBeenCalledWith(
       'attempt-1',
@@ -215,6 +218,8 @@ describe('AuthService desktop Google sign-in', () => {
 
     expect(result.statusCode).toBe(404);
     expect(result.html).toContain('We could not find this sign-in request');
+    expect(result.html).not.toContain('Return to the SoftLogic desktop app.');
+    expect(result.html).not.toContain('Start Google sign-in again.');
     expect(mockedAuthRepository.updateGoogleDesktopAuthAttempt).not.toHaveBeenCalled();
   });
 });
