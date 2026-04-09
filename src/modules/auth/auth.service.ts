@@ -3,6 +3,7 @@ import {
   GoogleDesktopAuthAttemptStatus,
   OtpType,
   Prisma,
+  UserRole,
   UserStatus,
 } from '@prisma/client';
 import { randomUUID } from 'crypto';
@@ -183,6 +184,7 @@ export class AuthService {
     }
 
     const googleUser = await googleStrategy.verifyIdToken(idToken);
+    const googleEmail = googleUser.email.trim().toLowerCase();
     const now = new Date();
 
     let user = await authRepository.findUserByGoogleId(googleUser.sub);
@@ -191,7 +193,7 @@ export class AuthService {
     }
 
     if (!user) {
-      const existingUser = await authRepository.findUserByEmail(googleUser.email);
+      const existingUser = await authRepository.findUserByEmail(googleEmail);
       if (existingUser && existingUser.status !== UserStatus.ACTIVE) {
         throw AuthError.invalidCredentials();
       }
@@ -205,10 +207,15 @@ export class AuthService {
           name: existingUser.name ?? googleUser.name,
         });
       } else {
-        throw new AppError(
-          'This Google account is not invited. Contact your administrator.',
-          403,
-        );
+        user = await authRepository.createUser({
+          avatar: googleUser.picture ?? undefined,
+          email: googleEmail,
+          googleId: googleUser.sub,
+          isEmailVerified: true,
+          lastLoginAt: now,
+          name: googleUser.name,
+          role: UserRole.STUDENT,
+        });
       }
     } else {
       user = await authRepository.updateUser(user.id, {
@@ -444,19 +451,23 @@ export class AuthService {
 
   async refreshToken(refreshToken: string): Promise<AuthResponse> {
     try {
-      const decoded = verifyRefreshToken(refreshToken);
-
       const session = await authRepository.findSessionByToken(refreshToken);
       if (!session) {
         throw AuthError.tokenInvalid();
       }
 
-      if (new Date() > session.expiresAt) {
+      const decoded = this.shouldRelaxAuthLimits
+        ? null
+        : verifyRefreshToken(refreshToken);
+
+      if (!this.shouldRelaxAuthLimits && new Date() > session.expiresAt) {
         await authRepository.deleteSession(session.id);
         throw AuthError.tokenExpired();
       }
 
-      const user = await authRepository.findUserById(decoded.userId);
+      const user = await authRepository.findUserById(
+        decoded?.userId ?? session.userId,
+      );
       if (!user || user.status !== UserStatus.ACTIVE) {
         throw AuthError.invalidCredentials();
       }

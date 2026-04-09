@@ -31,7 +31,6 @@ jest.mock('@/shared/utils/jwt', () => ({
 import { authRepository } from '@/modules/auth/auth.repository';
 import { authService } from '@/modules/auth/auth.service';
 import { googleStrategy } from '@/modules/auth/strategies/google.strategy';
-import { AppError } from '@/shared/errors/AppError';
 import { findUserContextById } from '@/modules/users/user-context.service';
 import { generateTokenPair } from '@/shared/utils/jwt';
 
@@ -134,16 +133,50 @@ describe('AuthService Google Sign-In', () => {
     );
   });
 
-  it('rejects sign-in when the Google account email is not invited', async () => {
+  it('creates a new active student when the Google account email is not invited', async () => {
     mockedAuthRepository.findUserByGoogleId.mockResolvedValue(null);
     mockedAuthRepository.findUserByEmail.mockResolvedValue(null);
-    await expect(authService.googleSignIn('google-id-token')).rejects.toMatchObject({
-      message: 'This Google account is not invited. Contact your administrator.',
-      statusCode: 403,
-    } satisfies Partial<AppError>);
+    mockedAuthRepository.createUser.mockResolvedValue({
+      id: 'student-1',
+      email: 'teacher@softlogicwhiteboard.com',
+      name: 'Teacher Demo',
+      avatar: 'https://example.com/avatar.png',
+      googleId: 'google-sub-1',
+      isEmailVerified: true,
+      role: UserRole.STUDENT,
+      status: UserStatus.ACTIVE,
+      timezone: 'UTC',
+      language: 'en',
+      invitedAt: new Date('2026-01-01T00:00:00.000Z'),
+      createdAt: new Date('2026-01-01T00:00:00.000Z'),
+      updatedAt: new Date('2026-01-01T00:00:00.000Z'),
+      deletedAt: null,
+      lastLoginAt: new Date(),
+      primaryOrganizationId: null,
+    } as any);
+    mockedFindUserContextById.mockResolvedValue({
+      ...safeUserContext,
+      id: 'student-1',
+      role: UserRole.STUDENT,
+    } as any);
 
-    expect(mockedAuthRepository.createUser).not.toHaveBeenCalled();
-    expect(mockedAuthRepository.createSession).not.toHaveBeenCalled();
+    const result = await authService.googleSignIn('google-id-token');
+
+    expect(result.user.role).toBe(UserRole.STUDENT);
+    expect(mockedAuthRepository.createUser).toHaveBeenCalledWith(
+      expect.objectContaining({
+        email: 'teacher@softlogicwhiteboard.com',
+        googleId: 'google-sub-1',
+        isEmailVerified: true,
+        role: UserRole.STUDENT,
+      }),
+    );
+    expect(mockedAuthRepository.createSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'student-1',
+        refreshToken: 'refresh-token',
+      }),
+    );
   });
 
   it('rejects sign-in for a disabled invited email account', async () => {
