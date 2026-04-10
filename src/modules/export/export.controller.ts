@@ -7,6 +7,7 @@ import fs from 'fs/promises';
 import path from 'path';
 
 import { exportService } from './export.service';
+import { importConversionService } from './import-conversion.service';
 
 type ExportQualityInput = 'LOW' | 'MEDIUM' | 'HIGH';
 type ExportResolutionInput = 'STANDARD' | 'HD' | 'ULTRA';
@@ -38,6 +39,34 @@ const normalizeExportResolution = (value: unknown): ExportResolutionInput => {
 };
 
 export class ExportController {
+  async convertImportDocument(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
+    try {
+      if (!req.file) {
+        throw new AppError('Document file is required.', 400);
+      }
+      const requestedType =
+        typeof req.body.type === 'string' ? req.body.type.trim().toLowerCase() : '';
+      if (requestedType !== 'pdf' && requestedType !== 'ppt') {
+        throw new AppError('Import type must be either pdf or ppt.', 400);
+      }
+
+      const result = await importConversionService.convertDocument({
+        requestedType,
+        fileBuffer: req.file.buffer,
+        fileName: req.file.originalname,
+        mimeType: req.file.mimetype,
+      });
+
+      ApiResponse.success(res, result, 'Document import converted');
+    } catch (error) {
+      next(error);
+    }
+  }
+
   async exportPdf(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const { canvasId, slideIds } = req.body;

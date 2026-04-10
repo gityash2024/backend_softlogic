@@ -45,6 +45,10 @@ const envSchema = z.object({
   CLOUDINARY_API_KEY: z.string().optional(),
   CLOUDINARY_API_SECRET: z.string().optional(),
 
+  // Whiteboard document import conversion
+  IMPORT_CONVERSION_WORKER_URL: z.string().url().optional(),
+  IMPORT_CONVERSION_WORKER_TOKEN: z.string().optional(),
+
   // Storage
   STORAGE_TYPE: z.enum(['minio', 's3', 'cloudinary']).default('cloudinary'),
 
