@@ -14,7 +14,11 @@ import { env } from '@/config';
 import { findUserContextById } from '@/modules/users/user-context.service';
 import { AuthError } from '@/shared/errors/AuthError';
 import { AppError } from '@/shared/errors/AppError';
-import { sendEmail, getOtpEmailHtml } from '@/shared/utils/email';
+import {
+  getBrandLogoEmailAttachments,
+  getOtpEmailHtml,
+  sendEmail,
+} from '@/shared/utils/email';
 import { generateTokenPair, verifyRefreshToken } from '@/shared/utils/jwt';
 import {
   generateOtp,
@@ -72,11 +76,7 @@ export class AuthService {
 
     await authRepository.invalidateUserOtps(user.id, OtpType.EMAIL_LOGIN);
 
-    const normalizedEmail = email.trim().toLowerCase();
-    const otpCode =
-      this.shouldUseFixedOtpForEmail(normalizedEmail) && this.fixedOtpCode != null
-        ? this.fixedOtpCode
-        : generateOtp();
+    const otpCode = generateOtp();
     const hashedOtp = await hashOtp(otpCode);
     const expiresAt = new Date(Date.now() + OTP_EXPIRY_MINUTES * 60 * 1000);
 
@@ -88,7 +88,10 @@ export class AuthService {
     });
 
     try {
+      const brandLogoAttachments = getBrandLogoEmailAttachments();
       await sendEmail({
+        attachments:
+          brandLogoAttachments.length > 0 ? brandLogoAttachments : undefined,
         to: email,
         subject: 'Your Softlogic Whiteboard Login Code',
         html: getOtpEmailHtml(otpCode),

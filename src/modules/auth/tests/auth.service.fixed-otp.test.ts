@@ -29,6 +29,13 @@ jest.mock('@/shared/utils/jwt', () => ({
 
 jest.mock('@/shared/utils/email', () => ({
   sendEmail: jest.fn(),
+  getBrandLogoEmailAttachments: jest.fn(() => [
+    {
+      cid: 'softlogic-logo',
+      filename: 'softlogic-logo.png',
+      path: '/tmp/softlogic-logo.png',
+    },
+  ]),
   getOtpEmailHtml: jest.fn(() => '<p>otp</p>'),
 }));
 
@@ -41,6 +48,11 @@ jest.mock('@/shared/utils/otp', () => ({
 import { authRepository } from '@/modules/auth/auth.repository';
 import { authService } from '@/modules/auth/auth.service';
 import { findUserContextById } from '@/modules/users/user-context.service';
+import {
+  getBrandLogoEmailAttachments,
+  getOtpEmailHtml,
+  sendEmail,
+} from '@/shared/utils/email';
 import { generateTokenPair } from '@/shared/utils/jwt';
 import {
   generateOtp,
@@ -51,6 +63,11 @@ import {
 const mockedAuthRepository = jest.mocked(authRepository);
 const mockedFindUserContextById = jest.mocked(findUserContextById);
 const mockedGenerateTokenPair = jest.mocked(generateTokenPair);
+const mockedSendEmail = jest.mocked(sendEmail);
+const mockedGetBrandLogoEmailAttachments = jest.mocked(
+  getBrandLogoEmailAttachments,
+);
+const mockedGetOtpEmailHtml = jest.mocked(getOtpEmailHtml);
 const mockedGenerateOtp = jest.mocked(generateOtp);
 const mockedVerifyOtpHash = jest.mocked(verifyOtpHash);
 const mockedHashOtp = jest.mocked(hashOtp);
@@ -192,7 +209,32 @@ describe('AuthService fixed OTP allowlist', () => {
 
     expect(mockedAuthRepository.invalidateUserOtps).toHaveBeenCalled();
     expect(mockedAuthRepository.createOtp).toHaveBeenCalled();
-    expect(mockedHashOtp).toHaveBeenCalledWith('1234');
+    expect(mockedHashOtp).toHaveBeenCalledWith('9876');
+    expect(mockedGetOtpEmailHtml).toHaveBeenCalledWith('9876');
+  });
+
+  it('sends the generated OTP in email content for allowlisted tester accounts', async () => {
+    await expect(
+      authService.sendOtp('admin@softlogicwhiteboard.com'),
+    ).resolves.toEqual({ message: 'OTP sent successfully' });
+
+    expect(mockedGenerateOtp).toHaveBeenCalledTimes(1);
+    expect(mockedHashOtp).toHaveBeenCalledWith('9876');
+    expect(mockedGetBrandLogoEmailAttachments).toHaveBeenCalled();
+    expect(mockedGetOtpEmailHtml).toHaveBeenCalledWith('9876');
+    expect(mockedSendEmail).toHaveBeenCalledWith(
+      expect.objectContaining({
+        attachments: [
+          expect.objectContaining({
+            cid: 'softlogic-logo',
+            filename: 'softlogic-logo.png',
+          }),
+        ],
+        to: 'admin@softlogicwhiteboard.com',
+        subject: 'Your Softlogic Whiteboard Login Code',
+        html: '<p>otp</p>',
+      }),
+    );
   });
 
   it('skips OTP attempt blocking when testing auth limits are relaxed', async () => {
