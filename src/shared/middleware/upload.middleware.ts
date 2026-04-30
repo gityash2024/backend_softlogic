@@ -5,6 +5,7 @@ import path from 'path';
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
 const MAX_DOCUMENT_FILE_SIZE = 50 * 1024 * 1024; // 50MB
+const MAX_LIVE_SESSION_FILE_SIZE = 250 * 1024 * 1024; // 250MB
 
 const storage = multer.memoryStorage();
 const documentMimeTypes = new Set<string>([
@@ -61,4 +62,10 @@ export const uploadDocumentSingle = (fieldName: string) =>
         );
       }
     },
+  }).single(fieldName);
+
+export const uploadLiveSessionFileSingle = (fieldName: string) =>
+  multer({
+    storage,
+    limits: { fileSize: MAX_LIVE_SESSION_FILE_SIZE },
   }).single(fieldName);

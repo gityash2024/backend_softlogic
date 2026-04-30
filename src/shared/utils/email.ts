@@ -29,10 +29,22 @@ interface EmailOptions {
 interface BrandEmailLayoutOptions {
   readonly preheader: string;
   readonly eyebrow: string;
+  readonly heroTitle?: string;
+  readonly heroCopy?: string;
   readonly title: string;
   readonly intro: string;
   readonly spotlightHtml: string;
   readonly outro: string;
+  readonly securityHtml?: string | null;
+}
+
+interface WelcomeEmailOptions {
+  readonly to: string;
+  readonly name?: string | null;
+  readonly role?: string | null;
+  readonly inviterName?: string | null;
+  readonly appUrl?: string;
+  readonly downloadPageUrl?: string;
 }
 
 export const sendEmail = async (options: EmailOptions): Promise<void> => {
@@ -95,6 +107,19 @@ const renderBrandEmailLayout = (
       </div>
     `
     : `<div class="brand-chip">${env.EMAIL_FROM_NAME}</div>`;
+
+  const securityHtml =
+    options.securityHtml === undefined
+      ? `
+        <div class="security-panel">
+          <p class="security-title">Security reminder</p>
+          <p class="security-copy">
+            Only enter this code inside the official SoftLogic whiteboard app or website.
+            Our team will never ask for this code over chat, phone, or email.
+          </p>
+        </div>
+      `
+      : options.securityHtml ?? '';
 
   return `
     <!DOCTYPE html>
@@ -276,9 +301,9 @@ const renderBrandEmailLayout = (
                 <tr>
                   <td class="hero">
                     ${brandMarkup}
-                    <h1 class="brand-title">Secure access for every learning session.</h1>
+                    <h1 class="brand-title">${options.heroTitle ?? 'Secure access for every learning session.'}</h1>
                     <p class="brand-copy">
-                      Fast, safe sign-in for the SoftLogic whiteboard experience.
+                      ${options.heroCopy ?? 'Fast, safe sign-in for the SoftLogic whiteboard experience.'}
                     </p>
                   </td>
                 </tr>
@@ -291,13 +316,7 @@ const renderBrandEmailLayout = (
                       ${options.spotlightHtml}
                     </div>
                     <p class="outro">${options.outro}</p>
-                    <div class="security-panel">
-                      <p class="security-title">Security reminder</p>
-                      <p class="security-copy">
-                        Only enter this code inside the official SoftLogic whiteboard app or website.
-                        Our team will never ask for this code over chat, phone, or email.
-                      </p>
-                    </div>
+                    ${securityHtml}
                   </td>
                 </tr>
                 <tr>
@@ -348,5 +367,146 @@ export const getOtpEmailHtml = (otp: string): string => {
     `,
     outro:
       'If you did not request this code, you can safely ignore this email and no changes will be made to your account.',
+  });
+};
+
+const escapeHtml = (value: string): string =>
+  value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+
+const formatRoleLabel = (role?: string | null): string => {
+  if (!role?.trim()) {
+    return 'SoftLogic member';
+  }
+
+  return role
+    .split('_')
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
+    .join(' ');
+};
+
+const trimTrailingSlash = (value: string): string => value.replace(/\/+$/, '');
+
+export const getWelcomeEmailHtml = ({
+  appUrl = env.PUBLIC_APP_URL,
+  downloadPageUrl = env.PUBLIC_DOWNLOAD_PAGE_URL,
+  inviterName,
+  name,
+  role,
+}: Omit<WelcomeEmailOptions, 'to'>): string => {
+  const safeName = escapeHtml(name?.trim() || 'there');
+  const safeRole = escapeHtml(formatRoleLabel(role));
+  const safeAppUrl = escapeHtml(trimTrailingSlash(appUrl));
+  const safeDownloadPageUrl = escapeHtml(trimTrailingSlash(downloadPageUrl));
+  const safeInviterName = inviterName?.trim()
+    ? escapeHtml(inviterName.trim())
+    : null;
+
+  return renderBrandEmailLayout({
+    preheader: 'Welcome to SoftLogic Whiteboard. Your account is ready.',
+    eyebrow: 'Welcome to SoftLogic',
+    heroTitle: 'Your SoftLogic workspace is ready.',
+    heroCopy:
+      'Teach, learn, draw, present, and collaborate from one focused whiteboard.',
+    title: `Welcome, ${safeName}`,
+    intro: safeInviterName
+      ? `${safeInviterName} created a SoftLogic account for you. Your role is set to ${safeRole}.`
+      : `Your SoftLogic account has been created. Your role is set to ${safeRole}.`,
+    spotlightHtml: `
+      <p class="spotlight-label">Start Here</p>
+      <a
+        href="${safeAppUrl}"
+        style="
+          display: inline-block;
+          padding: 14px 24px;
+          border-radius: 999px;
+          background: #08357c;
+          color: #ffffff;
+          font-size: 15px;
+          font-weight: 800;
+          text-decoration: none;
+        "
+      >
+        Open SoftLogic
+      </a>
+      <p style="margin: 18px 0 0; color: #475467; font-size: 14px; line-height: 1.6;">
+        Prefer the desktop app? Download it here:
+        <a href="${safeDownloadPageUrl}" style="color: #2563eb; font-weight: 700;">${safeDownloadPageUrl}</a>
+      </p>
+    `,
+    outro:
+      'Use your email address to sign in. SoftLogic will send a secure one-time code whenever verification is required.',
+    securityHtml: null,
+  });
+};
+
+export const sendWelcomeEmail = async ({
+  to,
+  ...templateOptions
+}: WelcomeEmailOptions): Promise<void> => {
+  try {
+    const brandLogoAttachments = getBrandLogoEmailAttachments();
+    await sendEmail({
+      attachments:
+        brandLogoAttachments.length > 0 ? brandLogoAttachments : undefined,
+      to,
+      subject: 'Welcome to SoftLogic Whiteboard',
+      html: getWelcomeEmailHtml(templateOptions),
+    });
+  } catch (error) {
+    console.error(`Welcome email failed for ${to}:`, error);
+  }
+};
+
+export const getLiveSessionInviteEmailHtml = ({
+  code,
+  teacherName,
+  sessionTitle,
+  downloadPageUrl,
+}: {
+  code: string;
+  teacherName: string;
+  sessionTitle: string;
+  downloadPageUrl: string;
+}): string => {
+  const safeTeacherName = escapeHtml(teacherName);
+  const safeSessionTitle = escapeHtml(sessionTitle);
+  const safeDownloadPageUrl = escapeHtml(downloadPageUrl);
+
+  return renderBrandEmailLayout({
+    preheader: `Your SoftLogic live-session code is ${code}.`,
+    eyebrow: 'Live Session Invite',
+    title: 'Join your SoftLogic classroom session',
+    intro: `${safeTeacherName} invited you to join "${safeSessionTitle}". Sign in to the SoftLogic app as a student and enter the code below from Join Session.`,
+    spotlightHtml: `
+      <p class="spotlight-label">Session Code</p>
+      <div
+        style="
+          display: inline-block;
+          padding: 16px 24px;
+          border-radius: 18px;
+          background: #ffffff;
+          border: 1px solid #c9dcff;
+          box-shadow: inset 0 1px 0 rgba(255,255,255,0.8);
+          font-size: 34px;
+          font-weight: 800;
+          letter-spacing: 0.32em;
+          color: #08357c;
+          text-indent: 0.32em;
+        "
+      >
+        ${escapeHtml(code)}
+      </div>
+      <p style="margin: 18px 0 0; color: #475467; font-size: 14px; line-height: 1.6;">
+        Need the app? Download it here:
+        <a href="${safeDownloadPageUrl}" style="color: #2563eb; font-weight: 700;">${safeDownloadPageUrl}</a>
+      </p>
+    `,
+    outro:
+      'This code is for your account only. If it expires, ask your teacher to send a new invite.',
   });
 };

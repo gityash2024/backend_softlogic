@@ -16,6 +16,7 @@ import {
 import { AppError } from '@/shared/errors/AppError';
 import { findUserContextById } from '@/modules/users/user-context.service';
 import { deleteImageAsset, uploadImageBuffer } from '@/shared/services/cloudinary.service';
+import { sendWelcomeEmail } from '@/shared/utils/email';
 
 interface CreateOrganizationInput {
   name: string;
@@ -349,6 +350,11 @@ export class AdminService {
     });
 
     await this.logAudit(actor.userId, 'user.create', 'user', user.id, `Created user ${user.email}`);
+    await sendWelcomeEmail({
+      to: user.email,
+      name: user.name,
+      role: user.role,
+    });
     return findUserContextById(user.id);
   }
 

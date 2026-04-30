@@ -1,9 +1,19 @@
 import { CorsOptions } from 'cors';
 import { env } from './env';
 
+const releasePortalOrigins = [
+  'https://softlogicdownloadpage.vercel.app',
+  'https://www.softlogicdownloadpage.vercel.app',
+];
+
 const allowedOrigins: string[] = env.NODE_ENV === 'development'
-  ? ['http://localhost:3000', 'http://localhost:8080', 'http://127.0.0.1:3000']
-  : []; // Add production origins here
+  ? [
+      'http://localhost:3000',
+      'http://localhost:8080',
+      'http://127.0.0.1:3000',
+      ...releasePortalOrigins,
+    ]
+  : releasePortalOrigins;
 
 export const corsConfig: CorsOptions = {
   origin: (origin, callback) => {

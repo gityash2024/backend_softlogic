@@ -1,7 +1,9 @@
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
+import path from 'path';
 import { corsConfig, swaggerSpec } from './config';
+import { createVersionPayload } from './config/version';
 import { errorMiddleware } from './shared/middleware/error.middleware';
 import { globalRateLimiter } from './shared/middleware/rate-limit.middleware';
 import { requestLogger } from './shared/middleware/logger.middleware';
@@ -16,10 +18,13 @@ import { exportRoutes } from './modules/export/export.routes';
 import { settingsRoutes } from './modules/settings/settings.routes';
 import { filterRoutes } from './modules/filter/filter.routes';
 import { adminRoutes } from './modules/admin/admin.routes';
+import { classroomRoutes } from './modules/classroom/classroom.routes';
+import { liveSessionRoutes } from './modules/live-sessions/live-session.routes';
+import { integrationsRoutes } from './modules/integrations/integrations.routes';
+import { integrationsController } from './modules/integrations/integrations.controller';
+import { mediaRoutes } from './modules/media/media.routes';
 import {
   chatRoutes,
-  mediaRoutes,
-  integrationsRoutes,
   assessmentsRoutes,
   aiRoutes,
   simulationsRoutes,
@@ -28,6 +33,7 @@ import {
 
 export const createApp = (): express.Application => {
   const app = express();
+  const apiPrefix = '/api/v1';
 
   // ─── Security ─────────────────────────────
   app.use(helmet());
@@ -44,19 +50,55 @@ export const createApp = (): express.Application => {
   app.use(globalRateLimiter);
 
   // ─── API Documentation ────────────────────
+  app.get('/api/docs.json', (_req, res) => {
+    res.json(swaggerSpec);
+  });
+
+  app.get(`${apiPrefix}/docs.json`, (_req, res) => {
+    res.json(swaggerSpec);
+  });
+
   app.use('/api/docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec, {
     customCss: '.swagger-ui .topbar { display: none }',
     customSiteTitle: 'Softlogic Whiteboard API',
   }));
+
+  app.use(
+    '/storage',
+    express.static(path.resolve(process.cwd(), 'storage'), {
+      dotfiles: 'deny',
+      fallthrough: false,
+      immutable: true,
+      maxAge: '1d',
+    }),
+  );
 
   // ─── Health Check ─────────────────────────
   app.get('/api/health', (_req, res) => {
     res.json({ status: 'ok', timestamp: new Date().toISOString() });
   });
 
-  // ─── Phase 1 Routes ───────────────────────
-  const apiPrefix = '/api/v1';
+  app.get('/api/version', (_req, res) => {
+    res.json({
+      success: true,
+      data: createVersionPayload(),
+      message: 'Version metadata',
+    });
+  });
 
+  app.get(`${apiPrefix}/version`, (_req, res) => {
+    res.json({
+      success: true,
+      data: createVersionPayload('v1'),
+      message: 'Version metadata',
+    });
+  });
+
+  app.get('/oauth/dropbox/callback', (req, res, next) => {
+    void integrationsController.dropboxCallback(req, res, next);
+  });
+
+  // ─── Phase 1 Routes ───────────────────────
   app.use(`${apiPrefix}/auth`, authRoutes);
   app.use(`${apiPrefix}/users`, userRoutes);
   app.use(`${apiPrefix}/canvas`, canvasRoutes);
@@ -65,6 +107,8 @@ export const createApp = (): express.Application => {
   app.use(`${apiPrefix}/users/me/settings`, settingsRoutes);
   app.use(`${apiPrefix}/filter`, filterRoutes);
   app.use(`${apiPrefix}/admin`, adminRoutes);
+  app.use(`${apiPrefix}/classroom`, classroomRoutes);
+  app.use(`${apiPrefix}/live-sessions`, liveSessionRoutes);
 
   // ─── Phase 2–6 Stubs ─────────────────────
   app.use(`${apiPrefix}/chat`, chatRoutes);

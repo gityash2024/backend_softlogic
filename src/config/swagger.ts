@@ -1,18 +1,23 @@
 import swaggerJsdoc from 'swagger-jsdoc';
 import { env } from './env';
+import { appVersionMetadata } from './version';
 
 const swaggerOptions: swaggerJsdoc.Options = {
   definition: {
     openapi: '3.0.0',
     info: {
       title: 'Softlogic Whiteboard API',
-      version: '1.0.0',
+      version: appVersionMetadata.version,
       description: 'API documentation for the Softlogic Whiteboard application',
       contact: {
         name: 'Softlogic Team',
       },
     },
     servers: [
+      {
+        url: 'https://softlogic-whiteboard-backend-testin.vercel.app/api/v1',
+        description: 'Production server',
+      },
       {
         url: `http://localhost:${env.PORT}/api/${env.API_VERSION}`,
         description: 'Development server',

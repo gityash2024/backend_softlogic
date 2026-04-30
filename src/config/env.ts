@@ -3,6 +3,16 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
+const optionalString = z.preprocess(
+  (value) => (value === '' ? undefined : value),
+  z.string().optional(),
+);
+
+const optionalUrl = z.preprocess(
+  (value) => (value === '' ? undefined : value),
+  z.string().url().optional(),
+);
+
 const envSchema = z.object({
   // Server
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
@@ -24,30 +34,56 @@ const envSchema = z.object({
   SEED_SUPER_ADMIN_NAME: z.string().default('Softlogic Super Admin'),
 
   // Google OAuth
-  GOOGLE_CLIENT_ID: z.string().optional(),
-  GOOGLE_CLIENT_SECRET: z.string().optional(),
-  GOOGLE_OAUTH_REDIRECT_URI: z.string().url().optional(),
+  GOOGLE_CLIENT_ID: optionalString,
+  GOOGLE_CLIENT_SECRET: optionalString,
+  GOOGLE_OAUTH_REDIRECT_URI: optionalUrl,
 
   // Email
   SMTP_HOST: z.string().default('smtp.gmail.com'),
   SMTP_PORT: z.coerce.number().default(587),
-  SMTP_USER: z.string().optional(),
-  SMTP_PASS: z.string().optional(),
+  SMTP_USER: optionalString,
+  SMTP_PASS: optionalString,
   EMAIL_FROM: z.string().default('noreply@softlogicwhiteboard.com'),
   EMAIL_FROM_NAME: z.string().default('Softlogic Whiteboard'),
   DEV_FIXED_OTP_ENABLED: z.coerce.boolean().default(false),
   DEV_FIXED_OTP_CODE: z.string().regex(/^\d{4}$/).optional(),
-  DEV_FIXED_OTP_ALLOWED_EMAILS: z.string().optional(),
+  DEV_FIXED_OTP_ALLOWED_EMAILS: optionalString,
   TESTING_RELAX_AUTH_LIMITS: z.coerce.boolean().default(false),
 
   // Cloudinary
-  CLOUDINARY_CLOUD_NAME: z.string().optional(),
-  CLOUDINARY_API_KEY: z.string().optional(),
-  CLOUDINARY_API_SECRET: z.string().optional(),
+  CLOUDINARY_CLOUD_NAME: optionalString,
+  CLOUDINARY_API_KEY: optionalString,
+  CLOUDINARY_API_SECRET: optionalString,
+
+  // Live sessions / RTC
+  LIVEKIT_URL: optionalUrl,
+  LIVEKIT_API_KEY: optionalString,
+  LIVEKIT_API_SECRET: optionalString,
+  TURN_URLS: optionalString,
+  TURN_USERNAME: optionalString,
+  TURN_CREDENTIAL: optionalString,
+  PUBLIC_DOWNLOAD_PAGE_URL: z.string().url().default('https://softlogicwhiteboard.com/download'),
+  PUBLIC_APP_URL: z.string().url().default('https://softlogicwhiteboard.com'),
+
+  // External content providers
+  SERPER_API_KEY: optionalString,
+  GOOGLE_SEARCH_API_KEY: optionalString,
+  GOOGLE_SEARCH_CX: optionalString,
+  YOUTUBE_API_KEY: optionalString,
+  DROPBOX_CLIENT_ID: optionalString,
+  DROPBOX_CLIENT_SECRET: optionalString,
+
+  // S3-compatible storage placeholders for production file/recording storage
+  STORAGE_BUCKET: optionalString,
+  STORAGE_REGION: optionalString,
+  STORAGE_ENDPOINT: optionalUrl,
+  STORAGE_ACCESS_KEY_ID: optionalString,
+  STORAGE_SECRET_ACCESS_KEY: optionalString,
+  STORAGE_PUBLIC_BASE_URL: optionalUrl,
 
   // Whiteboard document import conversion
-  IMPORT_CONVERSION_WORKER_URL: z.string().url().optional(),
-  IMPORT_CONVERSION_WORKER_TOKEN: z.string().optional(),
+  IMPORT_CONVERSION_WORKER_URL: optionalUrl,
+  IMPORT_CONVERSION_WORKER_TOKEN: optionalString,
 
   // Storage
   STORAGE_TYPE: z.enum(['minio', 's3', 'cloudinary']).default('cloudinary'),

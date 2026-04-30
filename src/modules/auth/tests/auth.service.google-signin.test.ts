@@ -28,16 +28,25 @@ jest.mock('@/shared/utils/jwt', () => ({
   verifyRefreshToken: jest.fn(),
 }));
 
+jest.mock('@/shared/utils/email', () => ({
+  getBrandLogoEmailAttachments: jest.fn(() => []),
+  getOtpEmailHtml: jest.fn(),
+  sendEmail: jest.fn(),
+  sendWelcomeEmail: jest.fn(),
+}));
+
 import { authRepository } from '@/modules/auth/auth.repository';
 import { authService } from '@/modules/auth/auth.service';
 import { googleStrategy } from '@/modules/auth/strategies/google.strategy';
 import { findUserContextById } from '@/modules/users/user-context.service';
+import { sendWelcomeEmail } from '@/shared/utils/email';
 import { generateTokenPair } from '@/shared/utils/jwt';
 
 const mockedAuthRepository = jest.mocked(authRepository);
 const mockedGoogleStrategy = jest.mocked(googleStrategy);
 const mockedFindUserContextById = jest.mocked(findUserContextById);
 const mockedGenerateTokenPair = jest.mocked(generateTokenPair);
+const mockedSendWelcomeEmail = jest.mocked(sendWelcomeEmail);
 
 const safeUserContext = {
   id: 'user-1',
@@ -131,6 +140,7 @@ describe('AuthService Google Sign-In', () => {
         ipAddress: '127.0.0.1',
       }),
     );
+    expect(mockedSendWelcomeEmail).not.toHaveBeenCalled();
   });
 
   it('creates a new active student when the Google account email is not invited', async () => {
@@ -175,6 +185,14 @@ describe('AuthService Google Sign-In', () => {
       expect.objectContaining({
         userId: 'student-1',
         refreshToken: 'refresh-token',
+      }),
+    );
+    expect(mockedSendWelcomeEmail).toHaveBeenCalledTimes(1);
+    expect(mockedSendWelcomeEmail).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: 'teacher@softlogicwhiteboard.com',
+        name: 'Teacher Demo',
+        role: UserRole.STUDENT,
       }),
     );
   });

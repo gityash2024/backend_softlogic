@@ -18,6 +18,7 @@ import {
   getBrandLogoEmailAttachments,
   getOtpEmailHtml,
   sendEmail,
+  sendWelcomeEmail,
 } from '@/shared/utils/email';
 import { generateTokenPair, verifyRefreshToken } from '@/shared/utils/jwt';
 import {
@@ -218,6 +219,11 @@ export class AuthService {
           lastLoginAt: now,
           name: googleUser.name,
           role: UserRole.STUDENT,
+        });
+        await sendWelcomeEmail({
+          to: user.email,
+          name: user.name,
+          role: user.role,
         });
       }
     } else {
