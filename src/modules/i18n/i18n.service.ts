@@ -132,11 +132,16 @@ export class I18nService {
       text,
       hash: hashText(text),
     }));
-    const cachedEntries = await this.cacheStore.findMany({
-      sourceLanguage: normalizedSourceLanguage,
-      targetLanguage: normalizedTargetLanguage,
-      sourceHashes: requested.map((entry) => entry.hash),
-    });
+    let cachedEntries: TranslationCacheEntry[] = [];
+    try {
+      cachedEntries = await this.cacheStore.findMany({
+        sourceLanguage: normalizedSourceLanguage,
+        targetLanguage: normalizedTargetLanguage,
+        sourceHashes: requested.map((entry) => entry.hash),
+      });
+    } catch {
+      cachedEntries = [];
+    }
     const cachedByHash = new Map(cachedEntries.map((entry) => [entry.sourceHash, entry]));
     const cachedHashes = new Set(cachedEntries.map((entry) => entry.sourceHash));
     const missing = requested.filter((entry) => !cachedByHash.has(entry.hash));
@@ -157,7 +162,12 @@ export class I18nService {
           translatedText: translated[index] || entry.text,
           provider: 'google',
         }));
-        await this.cacheStore.upsertMany(cacheEntries);
+        try {
+          await this.cacheStore.upsertMany(cacheEntries);
+        } catch {
+          // Live translations should still be returned even if cache persistence
+          // is temporarily unavailable.
+        }
         cacheEntries.forEach((entry) => cachedByHash.set(entry.sourceHash, entry));
       } catch {
         providerAvailable = false;
