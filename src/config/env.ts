@@ -69,6 +69,7 @@ const envSchema = z.object({
   SERPER_API_KEY: optionalString,
   GOOGLE_SEARCH_API_KEY: optionalString,
   GOOGLE_SEARCH_CX: optionalString,
+  GOOGLE_TRANSLATE_API_KEY: optionalString,
   YOUTUBE_API_KEY: optionalString,
   DROPBOX_CLIENT_ID: optionalString,
   DROPBOX_CLIENT_SECRET: optionalString,

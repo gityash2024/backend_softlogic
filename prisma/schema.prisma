@@ -203,6 +203,21 @@ model UserSettings {
   @@map("user_settings")
 }
 
+model TranslationCache {
+  id             String   @id @default(uuid())
+  sourceLanguage String
+  targetLanguage String
+  sourceHash     String
+  sourceText     String
+  translatedText String
+  provider       String   @default("google")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@unique([sourceLanguage, targetLanguage, sourceHash])
+  @@index([targetLanguage])
+}
+
 enum PerformanceLevel {
   LOW
   MEDIUM

@@ -23,6 +23,7 @@ import { liveSessionRoutes } from './modules/live-sessions/live-session.routes';
 import { integrationsRoutes } from './modules/integrations/integrations.routes';
 import { integrationsController } from './modules/integrations/integrations.controller';
 import { mediaRoutes } from './modules/media/media.routes';
+import { i18nRoutes } from './modules/i18n/i18n.routes';
 import {
   chatRoutes,
   assessmentsRoutes,
@@ -107,6 +108,7 @@ export const createApp = (): express.Application => {
   app.use(`${apiPrefix}/users/me/settings`, settingsRoutes);
   app.use(`${apiPrefix}/filter`, filterRoutes);
   app.use(`${apiPrefix}/admin`, adminRoutes);
+  app.use(`${apiPrefix}/i18n`, i18nRoutes);
   app.use(`${apiPrefix}/classroom`, classroomRoutes);
   app.use(`${apiPrefix}/live-sessions`, liveSessionRoutes);
 
