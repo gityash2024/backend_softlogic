@@ -73,6 +73,9 @@ const envSchema = z.object({
   YOUTUBE_API_KEY: optionalString,
   DROPBOX_CLIENT_ID: optionalString,
   DROPBOX_CLIENT_SECRET: optionalString,
+  GOOGLE_DRIVE_CLIENT_ID: optionalString,
+  GOOGLE_DRIVE_CLIENT_SECRET: optionalString,
+  GOOGLE_DRIVE_REDIRECT_URI: optionalUrl,
 
   // S3-compatible storage placeholders for production file/recording storage
   STORAGE_BUCKET: optionalString,

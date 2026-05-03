@@ -98,6 +98,9 @@ export const createApp = (): express.Application => {
   app.get('/oauth/dropbox/callback', (req, res, next) => {
     void integrationsController.dropboxCallback(req, res, next);
   });
+  app.get('/oauth/google-drive/callback', (req, res, next) => {
+    void integrationsController.googleDriveCallback(req, res, next);
+  });
 
   // ─── Phase 1 Routes ───────────────────────
   app.use(`${apiPrefix}/auth`, authRoutes);

@@ -11,6 +11,9 @@ jest.mock('@/config', () => ({
     PUBLIC_APP_URL: 'https://app.example.com',
     DROPBOX_CLIENT_ID: 'dropbox-client-id',
     DROPBOX_CLIENT_SECRET: 'dropbox-client-secret',
+    GOOGLE_DRIVE_CLIENT_ID: 'google-drive-client-id',
+    GOOGLE_DRIVE_CLIENT_SECRET: 'google-drive-client-secret',
+    GOOGLE_DRIVE_REDIRECT_URI: 'https://app.example.com/oauth/google-drive/callback',
   },
   prisma: {
     oAuthConnection: {
@@ -24,6 +27,12 @@ jest.mock('@/config', () => ({
     },
     lmsSyncJob: {
       create: jest.fn(),
+    },
+    canvas: {
+      findMany: jest.fn(),
+    },
+    export: {
+      findMany: jest.fn(),
     },
   },
 }));
@@ -40,6 +49,12 @@ const mockedPrisma = prisma as unknown as {
     upsert: jest.Mock;
     deleteMany: jest.Mock;
     update: jest.Mock;
+  };
+  canvas: {
+    findMany: jest.Mock;
+  };
+  export: {
+    findMany: jest.Mock;
   };
 };
 
@@ -199,5 +214,144 @@ describe('IntegrationsService Dropbox', () => {
         size: 4,
       }),
     );
+  });
+
+  it('uploads a file to Dropbox', async () => {
+    const state = new URL(integrationsService.dropboxOAuthUrl('user-1').authUrl!)
+      .searchParams
+      .get('state')!;
+    mockedFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        access_token: 'access-token',
+        refresh_token: 'refresh-token',
+        expires_in: 14400,
+      }),
+    });
+    await integrationsService.handleDropboxCallback({ code: 'oauth-code', state });
+    const storedTokens = mockedPrisma.oAuthConnection.upsert.mock.calls[0][0]
+      .create.encryptedTokens;
+    mockedPrisma.oAuthConnection.findUnique.mockResolvedValue({
+      encryptedTokens: storedTokens,
+      scopes: 'files.metadata.read files.content.read files.content.write',
+      updatedAt: new Date(),
+      expiresAt: new Date(Date.now() + 14400 * 1000),
+    });
+    mockedFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        id: 'dbx-file-id',
+        name: 'board.softlogic-board',
+        path_display: '/Boards/board.softlogic-board',
+        size: 4,
+      }),
+    });
+
+    await expect(
+      integrationsService.uploadDropboxFile('user-1', {
+        fileName: 'board.softlogic-board',
+        path: '/Boards',
+        contentBase64: Buffer.from([1, 2, 3, 4]).toString('base64'),
+      }),
+    ).resolves.toMatchObject({
+      id: 'dbx-file-id',
+      path: '/Boards/board.softlogic-board',
+      sizeBytes: 4,
+    });
+    expect(mockedFetch).toHaveBeenLastCalledWith(
+      'https://content.dropboxapi.com/2/files/upload',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({
+          'Dropbox-API-Arg': expect.stringContaining('/Boards/board.softlogic-board'),
+        }),
+      }),
+    );
+  });
+
+  it('creates a signed Google Drive OAuth URL', () => {
+    const result = integrationsService.googleDriveOAuthUrl('user-1');
+
+    expect(result.configured).toBe(true);
+    const url = new URL(result.authUrl!);
+    expect(url.origin + url.pathname).toBe('https://accounts.google.com/o/oauth2/v2/auth');
+    expect(url.searchParams.get('client_id')).toBe('google-drive-client-id');
+    expect(url.searchParams.get('redirect_uri')).toBe(
+      'https://app.example.com/oauth/google-drive/callback',
+    );
+    expect(url.searchParams.get('scope')).toBe(
+      'https://www.googleapis.com/auth/drive.file',
+    );
+  });
+
+  it('lists Google Drive files for a connected user', async () => {
+    const state = new URL(integrationsService.googleDriveOAuthUrl('user-1').authUrl!)
+      .searchParams
+      .get('state')!;
+    mockedFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        access_token: 'drive-access-token',
+        refresh_token: 'drive-refresh-token',
+        expires_in: 3600,
+      }),
+    });
+    await integrationsService.handleGoogleDriveCallback({ code: 'oauth-code', state });
+    const storedTokens = mockedPrisma.oAuthConnection.upsert.mock.calls.at(-1)[0]
+      .create.encryptedTokens;
+    mockedPrisma.oAuthConnection.findUnique.mockResolvedValue({
+      encryptedTokens: storedTokens,
+      scopes: 'https://www.googleapis.com/auth/drive.file',
+      updatedAt: new Date(),
+      expiresAt: new Date(Date.now() + 3600 * 1000),
+    });
+    mockedFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        files: [
+          {
+            id: 'folder-id',
+            name: 'Lessons',
+            mimeType: 'application/vnd.google-apps.folder',
+          },
+          {
+            id: 'file-id',
+            name: 'worksheet.pdf',
+            mimeType: 'application/pdf',
+            size: '2048',
+          },
+        ],
+      }),
+    });
+
+    await expect(
+      integrationsService.listGoogleDriveFiles('user-1', 'root'),
+    ).resolves.toMatchObject({
+      entries: [
+        { id: 'folder-id', name: 'Lessons', type: 'folder' },
+        { id: 'file-id', name: 'worksheet.pdf', type: 'file', sizeBytes: 2048 },
+      ],
+    });
+  });
+
+  it('stores Web Portal uploads through app storage', async () => {
+    mockedStorage.storeFile.mockResolvedValue({
+      fileName: 'board.softlogic-board',
+      mimeType: 'application/octet-stream',
+      sizeBytes: 3,
+      storageKey: 'web-portal/user-1/board.softlogic-board',
+      publicUrl: 'https://cdn.example.com/board.softlogic-board',
+    });
+
+    await expect(
+      integrationsService.uploadWebPortalFile('user-1', {
+        fileName: 'board.softlogic-board',
+        contentBase64: Buffer.from([1, 2, 3]).toString('base64'),
+      }),
+    ).resolves.toMatchObject({
+      storageKey: 'web-portal/user-1/board.softlogic-board',
+      publicUrl: 'https://cdn.example.com/board.softlogic-board',
+      type: 'file',
+    });
   });
 });

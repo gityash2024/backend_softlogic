@@ -538,6 +538,7 @@ model OAuthConnection {
 enum OAuthProvider {
   GOOGLE
   DROPBOX
+  GOOGLE_DRIVE
   LMS
 }
 

@@ -70,6 +70,47 @@ export class IntegrationsController {
     }
   }
 
+  async googleDriveCallback(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
+    try {
+      await integrationsService.handleGoogleDriveCallback({
+        code: req.query.code?.toString(),
+        state: req.query.state?.toString(),
+        error: req.query.error?.toString(),
+      });
+      res
+        .status(200)
+        .setHeader('content-type', 'text/html; charset=utf-8')
+        .send(`
+          <!doctype html>
+          <html lang="en">
+            <head>
+              <meta charset="utf-8" />
+              <meta name="viewport" content="width=device-width, initial-scale=1" />
+              <title>Google Drive connected</title>
+              <style>
+                body { font-family: Inter, Arial, sans-serif; margin: 0; min-height: 100vh; display: grid; place-items: center; background: #f1f5f9; color: #0f172a; }
+                main { width: min(520px, calc(100vw - 32px)); padding: 32px; border-radius: 18px; background: #fff; box-shadow: 0 20px 60px rgba(15, 23, 42, .12); text-align: center; }
+                h1 { color: #08357c; margin: 0 0 12px; }
+                p { color: #475569; line-height: 1.6; margin: 0; }
+              </style>
+            </head>
+            <body>
+              <main>
+                <h1>Google Drive connected</h1>
+                <p>You can close this browser window and return to Softlogic Whiteboard.</p>
+              </main>
+            </body>
+          </html>
+        `);
+    } catch (error) {
+      next(error);
+    }
+  }
+
   async dropboxStatus(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       ApiResponse.success(res, await integrationsService.dropboxStatus(req.user!.userId));
@@ -113,6 +154,182 @@ export class IntegrationsController {
           req.body.path?.toString() ?? '',
         ),
         'Dropbox file imported',
+      );
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async createDropboxFolder(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
+    try {
+      ApiResponse.created(
+        res,
+        await integrationsService.createDropboxFolder(req.user!.userId, req.body),
+        'Dropbox folder created',
+      );
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async uploadDropboxFile(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
+    try {
+      ApiResponse.created(
+        res,
+        await integrationsService.uploadDropboxFile(req.user!.userId, req.body),
+        'Dropbox file uploaded',
+      );
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async googleDriveOAuthUrl(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
+    try {
+      ApiResponse.success(
+        res,
+        integrationsService.googleDriveOAuthUrl(req.user!.userId),
+      );
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async googleDriveStatus(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      ApiResponse.success(
+        res,
+        await integrationsService.googleDriveStatus(req.user!.userId),
+      );
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async disconnectGoogleDrive(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
+    try {
+      ApiResponse.success(
+        res,
+        await integrationsService.disconnectGoogleDrive(req.user!.userId),
+        'Google Drive disconnected',
+      );
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async googleDriveFiles(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      ApiResponse.success(
+        res,
+        await integrationsService.listGoogleDriveFiles(
+          req.user!.userId,
+          req.query.parentId?.toString() ?? 'root',
+          req.query.cursor?.toString(),
+        ),
+      );
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async createGoogleDriveFolder(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
+    try {
+      ApiResponse.created(
+        res,
+        await integrationsService.createGoogleDriveFolder(req.user!.userId, req.body),
+        'Google Drive folder created',
+      );
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async uploadGoogleDriveFile(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
+    try {
+      ApiResponse.created(
+        res,
+        await integrationsService.uploadGoogleDriveFile(req.user!.userId, req.body),
+        'Google Drive file uploaded',
+      );
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async importGoogleDriveFile(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
+    try {
+      ApiResponse.created(
+        res,
+        await integrationsService.importGoogleDriveFile(
+          req.user!.userId,
+          req.body.fileId?.toString() ?? '',
+          req.body.fileName?.toString(),
+        ),
+        'Google Drive file imported',
+      );
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async webPortalStatus(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      ApiResponse.success(res, integrationsService.webPortalStatus(req.user!.userId));
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async webPortalFiles(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      ApiResponse.success(
+        res,
+        await integrationsService.listWebPortalFiles(req.user!.userId),
+      );
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async uploadWebPortalFile(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
+    try {
+      ApiResponse.created(
+        res,
+        await integrationsService.uploadWebPortalFile(req.user!.userId, req.body),
+        'Web Portal file stored',
       );
     } catch (error) {
       next(error);
