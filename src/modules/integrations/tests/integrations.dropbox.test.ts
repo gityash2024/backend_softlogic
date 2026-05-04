@@ -33,6 +33,7 @@ jest.mock('@/config', () => ({
     },
     export: {
       findMany: jest.fn(),
+      findFirst: jest.fn(),
     },
   },
 }));
@@ -55,6 +56,7 @@ const mockedPrisma = prisma as unknown as {
   };
   export: {
     findMany: jest.Mock;
+    findFirst: jest.Mock;
   };
 };
 
@@ -74,6 +76,7 @@ describe('IntegrationsService Dropbox', () => {
     const result = integrationsService.dropboxOAuthUrl('user-1');
 
     expect(result.configured).toBe(true);
+    expect(result.action).toBe('connect');
     const url = new URL(result.authUrl!);
     expect(url.origin + url.pathname).toBe('https://www.dropbox.com/oauth2/authorize');
     expect(url.searchParams.get('client_id')).toBe('dropbox-client-id');
@@ -81,6 +84,17 @@ describe('IntegrationsService Dropbox', () => {
       'https://app.example.com/oauth/dropbox/callback',
     );
     expect(url.searchParams.get('state')).toBeTruthy();
+  });
+
+  it('returns an actionable disconnected Dropbox status', async () => {
+    mockedPrisma.oAuthConnection.findUnique.mockResolvedValue(null);
+
+    await expect(integrationsService.dropboxStatus('user-1')).resolves.toMatchObject({
+      configured: true,
+      connected: false,
+      action: 'connect',
+      message: 'Connect your Dropbox account.',
+    });
   });
 
   it('exchanges callback code and stores encrypted Dropbox tokens', async () => {
@@ -273,6 +287,7 @@ describe('IntegrationsService Dropbox', () => {
     const result = integrationsService.googleDriveOAuthUrl('user-1');
 
     expect(result.configured).toBe(true);
+    expect(result.action).toBe('connect');
     const url = new URL(result.authUrl!);
     expect(url.origin + url.pathname).toBe('https://accounts.google.com/o/oauth2/v2/auth');
     expect(url.searchParams.get('client_id')).toBe('google-drive-client-id');
@@ -282,6 +297,17 @@ describe('IntegrationsService Dropbox', () => {
     expect(url.searchParams.get('scope')).toBe(
       'https://www.googleapis.com/auth/drive.file',
     );
+  });
+
+  it('returns an actionable disconnected Google Drive status', async () => {
+    mockedPrisma.oAuthConnection.findUnique.mockResolvedValue(null);
+
+    await expect(integrationsService.googleDriveStatus('user-1')).resolves.toMatchObject({
+      configured: true,
+      connected: false,
+      action: 'connect',
+      message: 'Connect your Google Drive account.',
+    });
   });
 
   it('lists Google Drive files for a connected user', async () => {
@@ -353,5 +379,81 @@ describe('IntegrationsService Dropbox', () => {
       publicUrl: 'https://cdn.example.com/board.softlogic-board',
       type: 'file',
     });
+  });
+
+  it('imports completed Web Portal exports through app storage', async () => {
+    mockedPrisma.export.findFirst.mockResolvedValue({
+      id: 'export-1',
+      fileUrl: 'https://app.example.com/storage/exports/export-1.pdf',
+      format: 'PDF',
+    });
+    mockedFetch.mockResolvedValueOnce({
+      ok: true,
+      arrayBuffer: async () => Buffer.from([4, 5, 6]).buffer,
+    });
+    mockedStorage.storeFile.mockResolvedValue({
+      fileName: 'Export export-1.pdf',
+      mimeType: 'application/pdf',
+      sizeBytes: 3,
+      storageKey: 'web-portal-import/user-1/export-1.pdf',
+      publicUrl: 'https://cdn.example.com/export-1.pdf',
+    });
+
+    await expect(
+      integrationsService.importWebPortalFile(
+        'user-1',
+        'https://app.example.com/storage/exports/export-1.pdf',
+        'Export export-1.pdf',
+      ),
+    ).resolves.toMatchObject({
+      exportId: 'export-1',
+      webPortalPath: 'https://app.example.com/storage/exports/export-1.pdf',
+      publicUrl: 'https://cdn.example.com/export-1.pdf',
+    });
+    expect(mockedPrisma.export.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ userId: 'user-1' }),
+      }),
+    );
+    expect(mockedStorage.storeFile).toHaveBeenCalledWith(
+      'web-portal-import/user-1',
+      expect.objectContaining({
+        originalname: 'Export export-1.pdf',
+        mimetype: 'application/pdf',
+      }),
+    );
+  });
+
+  it.each([
+    ['diagram.svg', 'image/svg+xml'],
+    ['slide.ppt', 'application/vnd.ms-powerpoint'],
+    ['lesson.pptx', 'application/vnd.openxmlformats-officedocument.presentationml.presentation'],
+    ['recording.m4a', 'audio/mp4'],
+    ['voice.ogg', 'audio/ogg'],
+    ['clip.webm', 'video/webm'],
+    ['movie.mov', 'video/quicktime'],
+    ['notes.md', 'text/markdown'],
+    ['board.slwb', 'application/vnd.softlogic.whiteboard+json'],
+  ])('resolves %s MIME type for connector uploads', async (fileName, mimeType) => {
+    mockedStorage.storeFile.mockResolvedValue({
+      fileName,
+      mimeType,
+      sizeBytes: 2,
+      storageKey: `web-portal/user-1/${fileName}`,
+      publicUrl: `https://cdn.example.com/${fileName}`,
+    });
+
+    await integrationsService.uploadWebPortalFile('user-1', {
+      fileName,
+      contentBase64: Buffer.from([1, 2]).toString('base64'),
+    });
+
+    expect(mockedStorage.storeFile).toHaveBeenCalledWith(
+      'web-portal/user-1',
+      expect.objectContaining({
+        originalname: fileName,
+        mimetype: mimeType,
+      }),
+    );
   });
 });

@@ -1,7 +1,9 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'crypto';
+import { readFile, stat } from 'fs/promises';
+import path from 'path';
 import { Readable } from 'stream';
 import jwt from 'jsonwebtoken';
-import { OAuthProvider, Prisma } from '@prisma/client';
+import { ExportStatus, OAuthProvider, Prisma } from '@prisma/client';
 
 import { env, prisma } from '@/config';
 import { AppError } from '@/shared/errors/AppError';
@@ -21,6 +23,68 @@ const GOOGLE_DRIVE_FILES_URL = 'https://www.googleapis.com/drive/v3/files';
 const GOOGLE_DRIVE_UPLOAD_URL = 'https://www.googleapis.com/upload/drive/v3/files';
 const GOOGLE_DRIVE_FOLDER_MIME = 'application/vnd.google-apps.folder';
 const GOOGLE_DRIVE_SCOPES = 'https://www.googleapis.com/auth/drive.file';
+
+const connectorStatusCode = (status: number): number => {
+  if (status === 401 || status === 403) {
+    return 401;
+  }
+  if (status === 404) {
+    return 404;
+  }
+  if (status === 429) {
+    return 429;
+  }
+  if (status >= 500) {
+    return 502;
+  }
+  return status >= 400 && status < 500 ? 400 : 502;
+};
+
+const connectorError = (
+  provider: 'Dropbox' | 'Google Drive',
+  action: string,
+  status: number,
+): AppError => {
+  if (status === 401 || status === 403) {
+    return new AppError(
+      `${provider} needs to be reconnected before ${action}.`,
+      401,
+    );
+  }
+  if (status === 404) {
+    return new AppError(`${provider} item was not found. Refresh and try again.`, 404);
+  }
+  if (status === 429) {
+    return new AppError(`${provider} rate limit reached. Please try again shortly.`, 429);
+  }
+  return new AppError(
+    `${provider} ${action} failed. Please reconnect ${provider} and try again.`,
+    connectorStatusCode(status),
+  );
+};
+
+const connectorTokenRefreshError = (
+  provider: 'Dropbox' | 'Google Drive',
+  status: number,
+): AppError =>
+  new AppError(
+    `${provider} token refresh failed. Please reconnect ${provider}.`,
+    status >= 500 ? 502 : 401,
+  );
+
+const connectorStatusMessage = (
+  provider: 'Dropbox' | 'Google Drive',
+  configured: boolean,
+  connected: boolean,
+): string => {
+  if (!configured) {
+    return `${provider} OAuth is not configured.`;
+  }
+  if (!connected) {
+    return `Connect your ${provider} account.`;
+  }
+  return `${provider} is connected.`;
+};
 
 const ensureQuery = (query: string): string => {
   const normalized = query.trim();
@@ -49,19 +113,23 @@ const encryptJson = (payload: Record<string, unknown>): string => {
 const decryptJson = <T extends Record<string, unknown>>(value: string): T => {
   const [ivValue, authTagValue, encryptedValue] = value.split('.');
   if (!ivValue || !authTagValue || !encryptedValue) {
-    throw new AppError('Stored Dropbox connection is invalid', 500);
+    throw new AppError('Stored cloud connection is invalid. Please reconnect.', 401);
   }
-  const decipher = createDecipheriv(
-    'aes-256-gcm',
-    encryptionKey(),
-    Buffer.from(ivValue, 'base64url'),
-  );
-  decipher.setAuthTag(Buffer.from(authTagValue, 'base64url'));
-  const decrypted = Buffer.concat([
-    decipher.update(Buffer.from(encryptedValue, 'base64url')),
-    decipher.final(),
-  ]);
-  return JSON.parse(decrypted.toString('utf8')) as T;
+  try {
+    const decipher = createDecipheriv(
+      'aes-256-gcm',
+      encryptionKey(),
+      Buffer.from(ivValue, 'base64url'),
+    );
+    decipher.setAuthTag(Buffer.from(authTagValue, 'base64url'));
+    const decrypted = Buffer.concat([
+      decipher.update(Buffer.from(encryptedValue, 'base64url')),
+      decipher.final(),
+    ]);
+    return JSON.parse(decrypted.toString('utf8')) as T;
+  } catch {
+    throw new AppError('Stored cloud connection is invalid. Please reconnect.', 401);
+  }
 };
 
 const mimeTypeForFileName = (fileName: string): string => {
@@ -74,8 +142,12 @@ const mimeTypeForFileName = (fileName: string): string => {
       return 'image/jpeg';
     case 'gif':
       return 'image/gif';
+    case 'bmp':
+      return 'image/bmp';
     case 'webp':
       return 'image/webp';
+    case 'svg':
+      return 'image/svg+xml';
     case 'pdf':
       return 'application/pdf';
     case 'pptx':
@@ -84,10 +156,32 @@ const mimeTypeForFileName = (fileName: string): string => {
       return 'application/vnd.ms-powerpoint';
     case 'mp4':
       return 'video/mp4';
+    case 'mov':
+      return 'video/quicktime';
+    case 'avi':
+      return 'video/x-msvideo';
+    case 'mkv':
+      return 'video/x-matroska';
+    case 'webm':
+      return 'video/webm';
     case 'mp3':
       return 'audio/mpeg';
     case 'wav':
       return 'audio/wav';
+    case 'm4a':
+      return 'audio/mp4';
+    case 'aac':
+      return 'audio/aac';
+    case 'ogg':
+      return 'audio/ogg';
+    case 'txt':
+      return 'text/plain';
+    case 'md':
+      return 'text/markdown';
+    case 'json':
+      return 'application/json';
+    case 'slwb':
+      return 'application/vnd.softlogic.whiteboard+json';
     default:
       return 'application/octet-stream';
   }
@@ -321,11 +415,12 @@ export class IntegrationsService {
   }
 
   dropboxOAuthUrl(userId: string) {
-    if (!env.DROPBOX_CLIENT_ID) {
+    if (!env.DROPBOX_CLIENT_ID || !env.DROPBOX_CLIENT_SECRET) {
       return {
         configured: false,
         authUrl: null,
         message: 'Dropbox OAuth is not configured.',
+        action: 'configure',
       };
     }
 
@@ -342,7 +437,12 @@ export class IntegrationsService {
     url.searchParams.set('redirect_uri', redirectUri);
     url.searchParams.set('state', state);
     url.searchParams.set('scope', DROPBOX_SCOPES);
-    return { configured: true, authUrl: url.toString() };
+    return {
+      configured: true,
+      authUrl: url.toString(),
+      message: 'Open this URL to connect Dropbox.',
+      action: 'connect',
+    };
   }
 
   async handleDropboxCallback(input: { code?: string; state?: string; error?: string }) {
@@ -353,7 +453,7 @@ export class IntegrationsService {
       throw new AppError('Dropbox callback is missing code or state', 400);
     }
     if (!env.DROPBOX_CLIENT_ID || !env.DROPBOX_CLIENT_SECRET) {
-      throw new AppError('Dropbox OAuth is not configured', 500);
+      throw new AppError('Dropbox OAuth is not configured.', 400);
     }
 
     const decoded = jwt.verify(input.state, env.JWT_ACCESS_SECRET) as DropboxStatePayload;
@@ -415,9 +515,13 @@ export class IntegrationsService {
 
   async dropboxStatus(userId: string) {
     const connection = await this.findDropboxConnection(userId);
+    const configured = Boolean(env.DROPBOX_CLIENT_ID && env.DROPBOX_CLIENT_SECRET);
+    const connected = Boolean(connection);
     return {
-      configured: Boolean(env.DROPBOX_CLIENT_ID && env.DROPBOX_CLIENT_SECRET),
-      connected: Boolean(connection),
+      configured,
+      connected,
+      action: connected ? 'refresh' : configured ? 'connect' : 'configure',
+      message: connectorStatusMessage('Dropbox', configured, connected),
       scopes: connection?.scopes ?? null,
       updatedAt: connection?.updatedAt ?? null,
       expiresAt: connection?.expiresAt ?? null,
@@ -447,7 +551,7 @@ export class IntegrationsService {
       }),
     });
     if (!response.ok) {
-      throw new AppError('Dropbox file list failed', response.status);
+      throw connectorError('Dropbox', 'file list', response.status);
     }
     const payload = await response.json() as DropboxListResponse;
     const entries = (payload.entries ?? []).map((entry) => ({
@@ -479,7 +583,7 @@ export class IntegrationsService {
       },
     });
     if (!response.ok) {
-      throw new AppError('Dropbox file download failed', response.status);
+      throw connectorError('Dropbox', 'file download', response.status);
     }
     const metadataHeader = response.headers.get('dropbox-api-result');
     const metadata = metadataHeader
@@ -527,7 +631,7 @@ export class IntegrationsService {
       }),
     });
     if (!response.ok) {
-      throw new AppError('Dropbox folder creation failed', response.status);
+      throw connectorError('Dropbox', 'folder creation', response.status);
     }
     const payload = await response.json() as {
       metadata?: { id?: string; name?: string; path_display?: string; path_lower?: string };
@@ -568,7 +672,7 @@ export class IntegrationsService {
       body: buffer,
     });
     if (!response.ok) {
-      throw new AppError('Dropbox file upload failed', response.status);
+      throw connectorError('Dropbox', 'file upload', response.status);
     }
     const metadata = await response.json() as {
       id?: string;
@@ -590,11 +694,12 @@ export class IntegrationsService {
   }
 
   googleDriveOAuthUrl(userId: string) {
-    if (!env.GOOGLE_DRIVE_CLIENT_ID) {
+    if (!env.GOOGLE_DRIVE_CLIENT_ID || !env.GOOGLE_DRIVE_CLIENT_SECRET) {
       return {
         configured: false,
         authUrl: null,
         message: 'Google Drive OAuth is not configured.',
+        action: 'configure',
       };
     }
 
@@ -612,7 +717,12 @@ export class IntegrationsService {
     url.searchParams.set('prompt', 'consent');
     url.searchParams.set('scope', GOOGLE_DRIVE_SCOPES);
     url.searchParams.set('state', state);
-    return { configured: true, authUrl: url.toString() };
+    return {
+      configured: true,
+      authUrl: url.toString(),
+      message: 'Open this URL to connect Google Drive.',
+      action: 'connect',
+    };
   }
 
   async handleGoogleDriveCallback(input: {
@@ -627,7 +737,7 @@ export class IntegrationsService {
       throw new AppError('Google Drive callback is missing code or state', 400);
     }
     if (!env.GOOGLE_DRIVE_CLIENT_ID || !env.GOOGLE_DRIVE_CLIENT_SECRET) {
-      throw new AppError('Google Drive OAuth is not configured', 500);
+      throw new AppError('Google Drive OAuth is not configured.', 400);
     }
 
     const decoded = jwt.verify(
@@ -690,11 +800,15 @@ export class IntegrationsService {
 
   async googleDriveStatus(userId: string) {
     const connection = await this.findGoogleDriveConnection(userId);
+    const configured = Boolean(
+      env.GOOGLE_DRIVE_CLIENT_ID && env.GOOGLE_DRIVE_CLIENT_SECRET,
+    );
+    const connected = Boolean(connection);
     return {
-      configured: Boolean(
-        env.GOOGLE_DRIVE_CLIENT_ID && env.GOOGLE_DRIVE_CLIENT_SECRET,
-      ),
-      connected: Boolean(connection),
+      configured,
+      connected,
+      action: connected ? 'refresh' : configured ? 'connect' : 'configure',
+      message: connectorStatusMessage('Google Drive', configured, connected),
       scopes: connection?.scopes ?? null,
       updatedAt: connection?.updatedAt ?? null,
       expiresAt: connection?.expiresAt ?? null,
@@ -728,7 +842,7 @@ export class IntegrationsService {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
     if (!response.ok) {
-      throw new AppError('Google Drive file list failed', response.status);
+      throw connectorError('Google Drive', 'file list', response.status);
     }
     const payload = await response.json() as GoogleDriveListResponse;
     return {
@@ -767,7 +881,7 @@ export class IntegrationsService {
       }),
     });
     if (!response.ok) {
-      throw new AppError('Google Drive folder creation failed', response.status);
+      throw connectorError('Google Drive', 'folder creation', response.status);
     }
     const metadata = await response.json() as {
       id?: string;
@@ -821,7 +935,7 @@ export class IntegrationsService {
       body,
     });
     if (!response.ok) {
-      throw new AppError('Google Drive file upload failed', response.status);
+      throw connectorError('Google Drive', 'file upload', response.status);
     }
     const metadataResponse = await response.json() as {
       id?: string;
@@ -856,7 +970,7 @@ export class IntegrationsService {
       { headers: { Authorization: `Bearer ${accessToken}` } },
     );
     if (!metadataResponse.ok) {
-      throw new AppError('Google Drive metadata lookup failed', metadataResponse.status);
+      throw connectorError('Google Drive', 'metadata lookup', metadataResponse.status);
     }
     const metadata = await metadataResponse.json() as {
       name?: string;
@@ -871,7 +985,7 @@ export class IntegrationsService {
       { headers: { Authorization: `Bearer ${accessToken}` } },
     );
     if (!response.ok) {
-      throw new AppError('Google Drive file download failed', response.status);
+      throw connectorError('Google Drive', 'file download', response.status);
     }
     const resolvedFileName = fileName?.trim() || metadata.name || 'drive-file';
     const buffer = Buffer.from(await response.arrayBuffer());
@@ -891,6 +1005,7 @@ export class IntegrationsService {
     return {
       configured: true,
       connected: true,
+      action: 'refresh',
       userId,
       message: 'Web Portal storage uses authenticated Softlogic app storage.',
     };
@@ -910,7 +1025,11 @@ export class IntegrationsService {
         take: 50,
       }),
       prisma.export.findMany({
-        where: { userId },
+        where: {
+          userId,
+          status: ExportStatus.COMPLETED,
+          fileUrl: { not: null },
+        },
         select: {
           id: true,
           format: true,
@@ -937,7 +1056,7 @@ export class IntegrationsService {
           id: exportRecord.id,
           name: `Export ${exportRecord.id}.${exportRecord.format.toLowerCase()}`,
           type: 'file',
-          path: exportRecord.fileUrl ?? '',
+          path: exportRecord.fileUrl!,
           status: exportRecord.status,
           sizeBytes: exportRecord.fileSize,
           modifiedAt: exportRecord.completedAt,
@@ -962,6 +1081,49 @@ export class IntegrationsService {
     return {
       ...stored,
       type: 'file',
+    };
+  }
+
+  async importWebPortalFile(userId: string, pathValue: string, fileName?: string) {
+    const normalizedPath = pathValue.trim();
+    if (!normalizedPath) {
+      throw new AppError('Web Portal file path is required', 400);
+    }
+    const exportRecord = await prisma.export.findFirst({
+      where: {
+        userId,
+        status: ExportStatus.COMPLETED,
+        OR: [
+          { id: normalizedPath },
+          { fileUrl: normalizedPath },
+        ],
+      },
+      select: {
+        id: true,
+        fileUrl: true,
+        format: true,
+      },
+    });
+    if (!exportRecord?.fileUrl) {
+      throw new AppError('Web Portal file is not available for import', 404);
+    }
+
+    const resolvedFileName =
+      fileName?.trim() ||
+      this.webPortalFileName(exportRecord.fileUrl, exportRecord.id, exportRecord.format);
+    const buffer = await this.readWebPortalExportBuffer(exportRecord.fileUrl);
+    const stored = await fileStorageService.storeFile(
+      `web-portal-import/${userId}`,
+      multerFileFromBuffer(
+        resolvedFileName,
+        mimeTypeForFileName(resolvedFileName),
+        buffer,
+      ),
+    );
+    return {
+      ...stored,
+      webPortalPath: exportRecord.fileUrl,
+      exportId: exportRecord.id,
     };
   }
 
@@ -997,6 +1159,47 @@ export class IntegrationsService {
         },
       },
     });
+  }
+
+  private webPortalFileName(
+    fileUrl: string,
+    exportId: string,
+    format: string,
+  ): string {
+    try {
+      const parsed = new URL(fileUrl);
+      const basename = path.basename(parsed.pathname);
+      if (basename && basename !== '/') {
+        return basename;
+      }
+    } catch {
+      const basename = path.basename(fileUrl);
+      if (basename && basename !== '.') {
+        return basename;
+      }
+    }
+    return `web-portal-export-${exportId}.${format.toLowerCase()}`;
+  }
+
+  private async readWebPortalExportBuffer(fileUrl: string): Promise<Buffer> {
+    if (/^https?:\/\//i.test(fileUrl)) {
+      const response = await fetch(fileUrl);
+      if (!response.ok) {
+        throw new AppError('Web Portal file download failed', response.status);
+      }
+      return Buffer.from(await response.arrayBuffer());
+    }
+
+    const storageRoot = path.resolve(process.cwd(), 'storage');
+    const resolvedPath = path.resolve(fileUrl);
+    if (!resolvedPath.startsWith(storageRoot)) {
+      throw new AppError('Invalid Web Portal storage path', 400);
+    }
+    const fileStats = await stat(resolvedPath);
+    if (!fileStats.isFile()) {
+      throw new AppError('Web Portal file is not available for import', 404);
+    }
+    return readFile(resolvedPath);
   }
 
   private async findGoogleDriveConnection(userId: string) {
@@ -1041,7 +1244,7 @@ export class IntegrationsService {
       body,
     });
     if (!response.ok) {
-      throw new AppError('Dropbox token refresh failed', response.status);
+      throw connectorTokenRefreshError('Dropbox', response.status);
     }
     const refreshed = await response.json() as DropboxTokenResponse;
     const expiresAt = refreshed.expires_in
@@ -1096,7 +1299,7 @@ export class IntegrationsService {
       body,
     });
     if (!response.ok) {
-      throw new AppError('Google Drive token refresh failed', response.status);
+      throw connectorTokenRefreshError('Google Drive', response.status);
     }
     const refreshed = await response.json() as GoogleDriveTokenResponse;
     const expiresAt = refreshed.expires_in

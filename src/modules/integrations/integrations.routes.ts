@@ -32,6 +32,7 @@ router.post('/google-drive/import', integrationsController.importGoogleDriveFile
 router.get('/web-portal/status', integrationsController.webPortalStatus);
 router.get('/web-portal/files', integrationsController.webPortalFiles);
 router.post('/web-portal/upload', integrationsController.uploadWebPortalFile);
+router.post('/web-portal/import', integrationsController.importWebPortalFile);
 router.get('/lms/status', integrationsController.lmsStatus);
 router.post('/lms/sync', integrationsController.createLmsSync);
 

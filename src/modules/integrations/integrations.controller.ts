@@ -336,6 +336,26 @@ export class IntegrationsController {
     }
   }
 
+  async importWebPortalFile(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
+    try {
+      ApiResponse.created(
+        res,
+        await integrationsService.importWebPortalFile(
+          req.user!.userId,
+          req.body.path?.toString() ?? '',
+          req.body.fileName?.toString(),
+        ),
+        'Web Portal file imported',
+      );
+    } catch (error) {
+      next(error);
+    }
+  }
+
   async lmsStatus(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const status = await integrationsService.lmsStatus(req.user!.userId);
