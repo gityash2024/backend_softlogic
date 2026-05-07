@@ -1,5 +1,9 @@
 import { I18nService, TranslationCacheEntry, TranslationCacheStore } from '../i18n.service';
-import { TranslationProvider } from '../i18n.provider';
+import {
+  GoogleFreeTranslationProvider,
+  TranslationProvider,
+} from '../i18n.provider';
+import type { VitaletsTranslateFn } from '../i18n.provider';
 import {
   normalizeLanguageId,
   supportedPortalLanguages,
@@ -30,6 +34,7 @@ class InMemoryCacheStore implements TranslationCacheStore {
 }
 
 class FakeProvider implements TranslationProvider {
+  readonly providerName = 'google-free';
   calls = 0;
 
   constructor(private readonly suffix = ' translated') {}
@@ -45,19 +50,23 @@ class FakeProvider implements TranslationProvider {
 }
 
 class FailingProvider implements TranslationProvider {
+  readonly providerName = 'google-free';
+
   async translateBatch(): Promise<string[]> {
     throw new Error('provider unavailable');
   }
 }
 
 describe('supportedPortalLanguages', () => {
-  it('contains more than 50 selectable languages', () => {
-    expect(supportedPortalLanguages.length).toBeGreaterThanOrEqual(50);
+  it('contains the full 75 selectable language registry', () => {
+    expect(supportedPortalLanguages).toHaveLength(75);
   });
 
   it('normalizes language and locale aliases', () => {
     expect(normalizeLanguageId('es')).toBe('es-es');
     expect(normalizeLanguageId('PT_pt')).toBe('pt-pt');
+    expect(normalizeLanguageId('az')).toBe('az-az');
+    expect(normalizeLanguageId('zu-ZA')).toBe('zu-za');
     expect(normalizeLanguageId('unknown')).toBe('en-us');
   });
 });
@@ -88,7 +97,7 @@ describe('I18nService', () => {
       sourceText: 'Save Changes',
       translatedText: 'Save Changes translated',
       cached: false,
-      provider: 'google',
+      provider: 'google-free',
     });
 
     const second = await service.translatePortalTexts({
@@ -99,7 +108,7 @@ describe('I18nService', () => {
     expect(second.translations[0]).toMatchObject({
       translatedText: 'Save Changes translated',
       cached: true,
-      provider: 'google',
+      provider: 'google-free',
     });
     expect(provider.calls).toBe(1);
   });
@@ -118,5 +127,61 @@ describe('I18nService', () => {
       cached: true,
       provider: 'fallback',
     });
+  });
+});
+
+describe('GoogleFreeTranslationProvider', () => {
+  it('keeps batch order and restores protected placeholders', async () => {
+    const calls: Array<{ text: string; from?: string; to?: string }> = [];
+    const translator = (async (
+      text: string,
+      options?: { from?: string; to?: string },
+    ) => {
+      calls.push({ text, from: options?.from, to: options?.to });
+      return { text: `TX ${text}` };
+    }) as unknown as VitaletsTranslateFn;
+    const provider = new GoogleFreeTranslationProvider(translator, {
+      concurrency: 2,
+      retryDelayMs: 1,
+      timeoutMs: 1000,
+    });
+
+    const result = await provider.translateBatch({
+      sourceLanguage: 'en',
+      targetLanguage: 'ja',
+      texts: ['Hello {name}', 'World'],
+    });
+
+    expect(result).toEqual(['TX Hello {name}', 'TX World']);
+    expect(calls).toEqual([
+      { text: 'Hello __SLP0__', from: 'en', to: 'ja' },
+      { text: 'World', from: 'en', to: 'ja' },
+    ]);
+  });
+
+  it('retries transient failures without dropping text', async () => {
+    let attempts = 0;
+    const translator = (async (text: string) => {
+      attempts += 1;
+      if (attempts === 1) {
+        throw new Error('temporary failure');
+      }
+      return { text: `OK ${text}` };
+    }) as unknown as VitaletsTranslateFn;
+    const provider = new GoogleFreeTranslationProvider(translator, {
+      concurrency: 1,
+      retryCount: 1,
+      retryDelayMs: 1,
+      timeoutMs: 1000,
+    });
+
+    await expect(
+      provider.translateBatch({
+        sourceLanguage: 'en',
+        targetLanguage: 'es',
+        texts: ['Retry me'],
+      }),
+    ).resolves.toEqual(['OK Retry me']);
+    expect(attempts).toBe(2);
   });
 });

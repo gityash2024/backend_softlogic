@@ -1,8 +1,9 @@
-import { env } from '@/config';
+import { translate } from '@vitalets/google-translate-api';
 
 import { protectPlaceholders } from './placeholder-utils';
 
 export interface TranslationProvider {
+  readonly providerName: string;
   translateBatch(input: {
     sourceLanguage: string;
     targetLanguage: string;
@@ -10,12 +11,7 @@ export interface TranslationProvider {
   }): Promise<string[]>;
 }
 
-interface GoogleTranslateResponse {
-  data?: {
-    translations?: Array<{ translatedText?: string }>;
-  };
-  error?: { message?: string };
-}
+export type VitaletsTranslateFn = typeof translate;
 
 const decodeHtmlEntities = (value: string): string => {
   return value
@@ -26,45 +22,112 @@ const decodeHtmlEntities = (value: string): string => {
     .replace(/&gt;/g, '>');
 };
 
-export class GoogleTranslationProvider implements TranslationProvider {
+const delay = (milliseconds: number): Promise<void> =>
+  new Promise((resolve) => {
+    setTimeout(resolve, milliseconds);
+  });
+
+async function mapWithConcurrency<TInput, TOutput>(
+  items: TInput[],
+  concurrency: number,
+  mapper: (item: TInput, index: number) => Promise<TOutput>,
+): Promise<TOutput[]> {
+  const results = new Array<TOutput>(items.length);
+  let nextIndex = 0;
+  const workerCount = Math.max(1, Math.min(concurrency, items.length));
+
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (nextIndex < items.length) {
+        const currentIndex = nextIndex;
+        nextIndex += 1;
+        results[currentIndex] = await mapper(items[currentIndex], currentIndex);
+      }
+    }),
+  );
+
+  return results;
+}
+
+export class GoogleFreeTranslationProvider implements TranslationProvider {
+  readonly providerName = 'google-free';
+
+  constructor(
+    private readonly translateFn: VitaletsTranslateFn = translate,
+    private readonly options: {
+      concurrency?: number;
+      retryCount?: number;
+      retryDelayMs?: number;
+      timeoutMs?: number;
+    } = {},
+  ) {}
+
   async translateBatch(input: {
     sourceLanguage: string;
     targetLanguage: string;
     texts: string[];
   }): Promise<string[]> {
-    const apiKey = env.GOOGLE_TRANSLATE_API_KEY?.trim();
-    if (!apiKey) {
-      throw new Error('Google Translate API key is not configured.');
+    if (input.texts.length === 0) {
+      return [];
     }
 
-    const protectedTexts = input.texts.map(protectPlaceholders);
-    const response = await fetch(
-      `https://translation.googleapis.com/language/translate/v2?key=${encodeURIComponent(apiKey)}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          q: protectedTexts.map((entry) => entry.text),
-          source: input.sourceLanguage,
-          target: input.targetLanguage,
-          format: 'text',
-        }),
-      },
+    return mapWithConcurrency(
+      input.texts,
+      this.options.concurrency ?? 4,
+      (text) => this.translateOne(text, input.sourceLanguage, input.targetLanguage),
+    );
+  }
+
+  private async translateOne(
+    sourceText: string,
+    sourceLanguage: string,
+    targetLanguage: string,
+  ): Promise<string> {
+    const retryCount = this.options.retryCount ?? 1;
+    let lastError: unknown;
+
+    for (let attempt = 0; attempt <= retryCount; attempt += 1) {
+      try {
+        const protectedText = protectPlaceholders(sourceText);
+        const translated = await this.translateProtectedText(
+          protectedText.text,
+          sourceLanguage,
+          targetLanguage,
+        );
+        return protectedText.restore(decodeHtmlEntities(translated || sourceText));
+      } catch (error) {
+        lastError = error;
+        if (attempt < retryCount) {
+          await delay(this.options.retryDelayMs ?? 200);
+        }
+      }
+    }
+
+    throw lastError instanceof Error
+      ? lastError
+      : new Error('Google free translation request failed.');
+  }
+
+  private async translateProtectedText(
+    text: string,
+    sourceLanguage: string,
+    targetLanguage: string,
+  ): Promise<string> {
+    const controller = new AbortController();
+    const timeout = setTimeout(
+      () => controller.abort(),
+      this.options.timeoutMs ?? 12000,
     );
 
-    const payload = (await response.json()) as GoogleTranslateResponse;
-    if (!response.ok) {
-      throw new Error(payload.error?.message || 'Google Translate request failed.');
+    try {
+      const result = await this.translateFn(text, {
+        from: sourceLanguage,
+        to: targetLanguage,
+        fetchOptions: { signal: controller.signal as never },
+      });
+      return result.text;
+    } finally {
+      clearTimeout(timeout);
     }
-
-    const translated = payload.data?.translations ?? [];
-    if (translated.length !== input.texts.length) {
-      throw new Error('Google Translate returned an unexpected response.');
-    }
-
-    return translated.map((entry, index) => {
-      const value = decodeHtmlEntities(entry.translatedText ?? input.texts[index]);
-      return protectedTexts[index].restore(value);
-    });
   }
 }

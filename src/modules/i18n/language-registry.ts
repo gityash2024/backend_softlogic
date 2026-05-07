@@ -74,6 +74,14 @@ export const supportedPortalLanguages: SupportedPortalLanguage[] = [
   { id: 'mn-mn', googleCode: 'mn', englishName: 'Mongolian', nativeName: 'Mongolian', regionCode: 'MN' },
   { id: 'ne-np', googleCode: 'ne', englishName: 'Nepali', nativeName: 'Nepali', regionCode: 'NP' },
   { id: 'si-lk', googleCode: 'si', englishName: 'Sinhala', nativeName: 'Sinhala', regionCode: 'LK' },
+  { id: 'az-az', googleCode: 'az', englishName: 'Azerbaijani', nativeName: 'Azerbaijani', regionCode: 'AZ' },
+  { id: 'be-by', googleCode: 'be', englishName: 'Belarusian', nativeName: 'Belarusian', regionCode: 'BY' },
+  { id: 'mk-mk', googleCode: 'mk', englishName: 'Macedonian', nativeName: 'Macedonian', regionCode: 'MK' },
+  { id: 'my-mm', googleCode: 'my', englishName: 'Burmese', nativeName: 'Burmese', regionCode: 'MM' },
+  { id: 'km-kh', googleCode: 'km', englishName: 'Khmer', nativeName: 'Khmer', regionCode: 'KH' },
+  { id: 'lo-la', googleCode: 'lo', englishName: 'Lao', nativeName: 'Lao', regionCode: 'LA' },
+  { id: 'uz-uz', googleCode: 'uz', englishName: 'Uzbek', nativeName: 'Uzbek', regionCode: 'UZ' },
+  { id: 'zu-za', googleCode: 'zu', englishName: 'Zulu', nativeName: 'Zulu', regionCode: 'ZA' },
 ];
 
 const languageById = new Map(

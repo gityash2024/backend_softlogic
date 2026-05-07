@@ -7,7 +7,7 @@ import {
   normalizeLanguageId,
   supportedPortalLanguages,
 } from './language-registry';
-import { GoogleTranslationProvider, TranslationProvider } from './i18n.provider';
+import { GoogleFreeTranslationProvider, TranslationProvider } from './i18n.provider';
 
 export interface TranslationCacheEntry {
   sourceLanguage: string;
@@ -95,7 +95,7 @@ const normalizeText = (text: string): string => text.trim();
 
 export class I18nService {
   constructor(
-    private readonly provider: TranslationProvider = new GoogleTranslationProvider(),
+    private readonly provider: TranslationProvider = new GoogleFreeTranslationProvider(),
     private readonly cacheStore: TranslationCacheStore = new PrismaTranslationCacheStore(),
   ) {}
 
@@ -160,7 +160,7 @@ export class I18nService {
           sourceHash: entry.hash,
           sourceText: entry.text,
           translatedText: translated[index] || entry.text,
-          provider: 'google',
+          provider: this.provider.providerName,
         }));
         try {
           await this.cacheStore.upsertMany(cacheEntries);
@@ -193,7 +193,10 @@ export class I18nService {
         return {
           sourceText: entry.text,
           translatedText: translated?.translatedText ?? entry.text,
-          cached: cachedHashes.has(entry.hash) || translated?.provider !== 'google',
+          cached:
+            cachedHashes.has(entry.hash) ||
+            translated?.provider === 'identity' ||
+            translated?.provider === 'fallback',
           provider: translated?.provider ?? 'fallback',
         };
       }),
