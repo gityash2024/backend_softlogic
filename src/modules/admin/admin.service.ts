@@ -29,6 +29,7 @@ interface UpdateOrganizationInput {
   name?: string;
   slug?: string;
   status?: OrganizationStatus;
+  settings?: Record<string, unknown>;
 }
 
 interface CreateUserInput {
@@ -77,6 +78,24 @@ const slugify = (value: string): string =>
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
     .slice(0, 80) || `org-${Date.now()}`;
+
+const asJsonObject = (
+  value: Prisma.JsonValue | null | undefined,
+): Record<string, unknown> => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return {};
+  }
+  return value as Record<string, unknown>;
+};
+
+const mergeOrganizationSettings = (
+  existing: Prisma.JsonValue | null | undefined,
+  incoming: Record<string, unknown>,
+): Prisma.InputJsonObject =>
+  ({
+    ...asJsonObject(existing),
+    ...incoming,
+  }) as Prisma.InputJsonObject;
 
 export class AdminService {
   private readonly organizationInclude = {
@@ -151,19 +170,27 @@ export class AdminService {
 
     const existing = await prisma.organization.findUnique({
       where: { id: organizationId },
-      select: { id: true, name: true },
+      select: { id: true, name: true, settings: true },
     });
     if (!existing) {
       throw new AppError('Organization not found', 404);
     }
 
+    const data: Prisma.OrganizationUpdateInput = {
+      name: input.name,
+      slug: input.slug ? slugify(input.slug) : undefined,
+      status: input.status,
+    };
+    if (input.settings !== undefined) {
+      data.settings = mergeOrganizationSettings(
+        existing.settings,
+        input.settings,
+      );
+    }
+
     const organization = await prisma.organization.update({
       where: { id: organizationId },
-      data: {
-        name: input.name,
-        slug: input.slug ? slugify(input.slug) : undefined,
-        status: input.status,
-      },
+      data,
       include: this.organizationInclude,
     });
 

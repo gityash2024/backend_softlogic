@@ -13,6 +13,7 @@ export const updateOrganizationSchema = z.object({
   name: z.string().min(2).max(120).optional(),
   slug: z.string().min(2).max(120).optional(),
   status: z.nativeEnum(OrganizationStatus).optional(),
+  settings: z.record(z.unknown()).optional(),
 }).refine((value) => Object.keys(value).length > 0, {
   message: 'At least one field is required',
 });
