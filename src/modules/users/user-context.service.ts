@@ -46,6 +46,15 @@ export interface OrganizationSummary {
   kind: OrganizationKind;
   status: OrganizationStatus;
   parentOrganizationId: string | null;
+  aiSettings: OrganizationAiSettings | null;
+}
+
+export interface OrganizationAiSettings {
+  geminiApiKey: string;
+  geminiTextModel: string;
+  geminiImageModel: string;
+  geminiTtsModel: string;
+  deepgramApiKey: string;
 }
 
 export interface SafeUserContext {
@@ -66,6 +75,36 @@ export interface SafeUserContext {
   subscription: SubscriptionSummary | null;
 }
 
+const asJsonObject = (
+  value: Prisma.JsonValue | null | undefined,
+): Record<string, unknown> => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return {};
+  }
+  return value as Record<string, unknown>;
+};
+
+const asString = (value: unknown): string =>
+  typeof value === 'string' ? value : '';
+
+const toOrganizationAiSettings = (
+  settings: Prisma.JsonValue | null | undefined,
+): OrganizationAiSettings | null => {
+  const root = asJsonObject(settings);
+  const ai = asJsonObject(root.ai as Prisma.JsonValue | null | undefined);
+  const summary = {
+    geminiApiKey: asString(ai.geminiApiKey ?? root.geminiApiKey),
+    geminiTextModel: asString(ai.geminiTextModel ?? root.geminiTextModel),
+    geminiImageModel: asString(ai.geminiImageModel ?? root.geminiImageModel),
+    geminiTtsModel: asString(ai.geminiTtsModel ?? root.geminiTtsModel),
+    deepgramApiKey: asString(ai.deepgramApiKey ?? root.deepgramApiKey),
+  };
+
+  return Object.values(summary).some((value) => value.trim().length > 0)
+    ? summary
+    : null;
+};
+
 const toOrganizationSummary = (organization: Organization): OrganizationSummary => ({
   id: organization.id,
   name: organization.name,
@@ -74,6 +113,7 @@ const toOrganizationSummary = (organization: Organization): OrganizationSummary 
   kind: organization.kind,
   status: organization.status,
   parentOrganizationId: organization.parentOrganizationId,
+  aiSettings: toOrganizationAiSettings(organization.settings),
 });
 
 const toSubscriptionSummary = (
