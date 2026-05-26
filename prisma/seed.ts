@@ -1,4 +1,5 @@
 import { PrismaClient, OrganizationKind, UserRole, UserStatus, SubscriptionStatus } from '@prisma/client';
+import bcrypt from 'bcrypt';
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -21,6 +22,8 @@ async function main() {
 
   const email = process.env.SEED_SUPER_ADMIN_EMAIL ?? 'admin@softlogicwhiteboard.com';
   const name = process.env.SEED_SUPER_ADMIN_NAME ?? 'Softlogic Super Admin';
+  const adminPassword = process.env.SEED_SUPER_ADMIN_PASSWORD ?? 'admin123';
+  const passwordHash = await bcrypt.hash(adminPassword, 10);
 
   const superAdmin = await prisma.user.upsert({
     where: { email },
@@ -30,6 +33,7 @@ async function main() {
       status: UserStatus.ACTIVE,
       primaryOrganizationId: organization.id,
       isEmailVerified: true,
+      passwordHash,
     },
     create: {
       email,
@@ -38,6 +42,7 @@ async function main() {
       status: UserStatus.ACTIVE,
       primaryOrganizationId: organization.id,
       isEmailVerified: true,
+      passwordHash,
     },
   });
 
@@ -87,7 +92,7 @@ async function main() {
     });
   }
 
-  console.log(`Seeded super admin: ${email}`);
+  console.log(`Seeded super admin: ${email} (password set)`);
 }
 
 main()

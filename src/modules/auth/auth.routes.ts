@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { authController } from './auth.controller';
 import { validate } from '@/shared/middleware/validation.middleware';
-import { sendOtpSchema, verifyOtpSchema, googleSignInSchema, refreshTokenSchema } from './auth.validator';
+import { sendOtpSchema, verifyOtpSchema, googleSignInSchema, refreshTokenSchema, adminLoginSchema } from './auth.validator';
 import { authRateLimiter, otpRateLimiter } from '@/shared/middleware/rate-limit.middleware';
 
 const router = Router();
@@ -55,6 +55,36 @@ router.post('/send-otp', otpRateLimiter, validate(sendOtpSchema), authController
  *         description: Login successful
  */
 router.post('/verify-otp', authRateLimiter, validate(verifyOtpSchema), authController.verifyOtp);
+
+/**
+ * @swagger
+ * /auth/admin/login:
+ *   post:
+ *     summary: Admin login with email and password
+ *     tags: [Auth]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [email, password]
+ *             properties:
+ *               email:
+ *                 type: string
+ *                 format: email
+ *               password:
+ *                 type: string
+ *                 minLength: 1
+ *     responses:
+ *       200:
+ *         description: Admin login successful
+ *       401:
+ *         description: Invalid credentials
+ *       403:
+ *         description: Account not authorized for admin panel access
+ */
+router.post('/admin/login', authRateLimiter, validate(adminLoginSchema), authController.adminLogin);
 
 /**
  * @swagger

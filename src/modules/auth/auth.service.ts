@@ -6,6 +6,7 @@ import {
   UserRole,
   UserStatus,
 } from '@prisma/client';
+import bcrypt from 'bcrypt';
 import { randomUUID } from 'crypto';
 import { existsSync, readFileSync } from 'fs';
 import { resolve } from 'path';
@@ -39,6 +40,12 @@ const OTP_EXPIRY_MINUTES = 10;
 const MAX_OTP_ATTEMPTS = 3;
 const MAX_OTP_SENDS_PER_HOUR = 3;
 const FALLBACK_FIXED_OTP = '1234';
+const ADMIN_LOGIN_ROLES: UserRole[] = [
+  UserRole.SUPER_ADMIN,
+  UserRole.PARTNER_ADMIN,
+  UserRole.CUSTOMER_ADMIN,
+  UserRole.ADMIN,
+];
 const GOOGLE_DESKTOP_AUTH_EXPIRY_MINUTES = 10;
 const GOOGLE_DESKTOP_POLL_INTERVAL_MS = 2000;
 const GOOGLE_AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
@@ -172,6 +179,60 @@ export class AuthService {
     }
 
     await authRepository.markOtpUsed(otp.id);
+
+    return {
+      tokens,
+      user: safeUser,
+    };
+  }
+
+  async adminLogin(
+    email: string,
+    password: string,
+    ipAddress?: string,
+  ): Promise<AuthResponse> {
+    const user = await authRepository.findUserByEmail(email);
+    if (!user || !user.passwordHash) {
+      throw AuthError.invalidCredentials();
+    }
+
+    const passwordMatches = await bcrypt.compare(password, user.passwordHash);
+    if (!passwordMatches) {
+      throw AuthError.invalidCredentials();
+    }
+
+    if (!ADMIN_LOGIN_ROLES.includes(user.role)) {
+      throw AuthError.unauthorized();
+    }
+
+    if (user.status !== UserStatus.ACTIVE) {
+      throw AuthError.unauthorized();
+    }
+
+    await authRepository.updateUser(user.id, {
+      lastLoginAt: new Date(),
+    });
+
+    const tokenPayload = {
+      userId: user.id,
+      email: user.email,
+      role: user.role,
+      organizationId: user.primaryOrganizationId,
+    };
+    const tokens = generateTokenPair(tokenPayload);
+
+    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+    await authRepository.createSession({
+      userId: user.id,
+      refreshToken: tokens.refreshToken,
+      ipAddress,
+      expiresAt,
+    });
+
+    const safeUser = await findUserContextById(user.id);
+    if (!safeUser) {
+      throw AuthError.invalidCredentials();
+    }
 
     return {
       tokens,

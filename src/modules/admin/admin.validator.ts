@@ -1,6 +1,30 @@
 import { OrganizationKind, OrganizationStatus, SubscriptionStatus, UserRole, UserStatus } from '@prisma/client';
 import { z } from 'zod';
 
+const booleanQuery = z.preprocess((value) => {
+  if (value === undefined || value === null || value === '') return undefined;
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'string') return ['1', 'true', 'yes'].includes(value.toLowerCase());
+  return value;
+}, z.boolean().optional());
+
+const optionalDate = z.preprocess((value) => {
+  if (value === undefined || value === null || value === '') return undefined;
+  return value;
+}, z.coerce.date().optional());
+
+const listQueryBase = z.object({
+  page: z.coerce.number().int().positive().default(1),
+  perPage: z.coerce.number().int().positive().max(100).default(20),
+  search: z.string().trim().optional(),
+  sortBy: z.string().trim().optional(),
+  sortOrder: z.enum(['asc', 'desc']).default('desc'),
+});
+
+export const exportQuerySchema = z.object({
+  format: z.enum(['xlsx', 'csv']).default('xlsx'),
+});
+
 export const createOrganizationSchema = z.object({
   name: z.string().min(2).max(120),
   slug: z.string().min(2).max(120).optional(),
@@ -62,3 +86,97 @@ export const updateSubscriptionSchema = z.object({
 }).refine((value) => Object.keys(value).length > 0, {
   message: 'At least one field is required',
 });
+
+export const listUsersQuerySchema = listQueryBase.extend({
+  role: z.string().trim().optional(),
+  status: z.string().trim().optional(),
+  organizationId: z.string().uuid().optional(),
+  isEmailVerified: booleanQuery,
+  createdFrom: optionalDate,
+  createdTo: optionalDate,
+  lastSeenFrom: optionalDate,
+  lastSeenTo: optionalDate,
+});
+
+export const listOrganizationsQuerySchema = listQueryBase.extend({
+  kind: z.string().trim().optional(),
+  status: z.string().trim().optional(),
+  parentOrganizationId: z.string().uuid().optional(),
+  hasLogo: booleanQuery,
+  aiConfigured: booleanQuery,
+  createdFrom: optionalDate,
+  createdTo: optionalDate,
+  updatedFrom: optionalDate,
+  updatedTo: optionalDate,
+});
+
+export const listSubscriptionsQuerySchema = listQueryBase.extend({
+  status: z.string().trim().optional(),
+  planName: z.string().trim().optional(),
+  organizationId: z.string().uuid().optional(),
+  userId: z.string().uuid().optional(),
+  expiringFrom: optionalDate,
+  expiringTo: optionalDate,
+  seatUsageMin: z.coerce.number().int().min(0).optional(),
+  seatUsageMax: z.coerce.number().int().min(0).optional(),
+  createdFrom: optionalDate,
+  createdTo: optionalDate,
+  startFrom: optionalDate,
+  startTo: optionalDate,
+  endFrom: optionalDate,
+  endTo: optionalDate,
+});
+
+export const listActivityQuerySchema = listQueryBase.extend({
+  actorUserId: z.string().uuid().optional(),
+  action: z.string().trim().optional(),
+  targetType: z.string().trim().optional(),
+  targetId: z.string().trim().optional(),
+  createdFrom: optionalDate,
+  createdTo: optionalDate,
+});
+
+export const listContentCanvasesQuerySchema = listQueryBase.extend({
+  organizationId: z.string().uuid().optional(),
+  userId: z.string().uuid().optional(),
+  isPublic: booleanQuery,
+  hasThumbnail: booleanQuery,
+  createdFrom: optionalDate,
+  createdTo: optionalDate,
+  updatedFrom: optionalDate,
+  updatedTo: optionalDate,
+});
+
+export const listContentLiveSessionsQuerySchema = listQueryBase.extend({
+  status: z.string().trim().optional(),
+  organizationId: z.string().uuid().optional(),
+  userId: z.string().uuid().optional(),
+  canvasId: z.string().uuid().optional(),
+  createdFrom: optionalDate,
+  createdTo: optionalDate,
+  startedFrom: optionalDate,
+  startedTo: optionalDate,
+  endedFrom: optionalDate,
+  endedTo: optionalDate,
+});
+
+export const listContentExportsQuerySchema = listQueryBase.extend({
+  status: z.string().trim().optional(),
+  format: z.string().trim().optional(),
+  organizationId: z.string().uuid().optional(),
+  userId: z.string().uuid().optional(),
+  canvasId: z.string().uuid().optional(),
+  createdFrom: optionalDate,
+  createdTo: optionalDate,
+  completedFrom: optionalDate,
+  completedTo: optionalDate,
+});
+
+export type ExportQuery = z.infer<typeof exportQuerySchema>;
+export type ListUsersQuery = z.infer<typeof listUsersQuerySchema>;
+export type ListOrganizationsQuery = z.infer<typeof listOrganizationsQuerySchema>;
+export type ListSubscriptionsQuery = z.infer<typeof listSubscriptionsQuerySchema>;
+export type ListActivityQuery = z.infer<typeof listActivityQuerySchema>;
+export type ListContentCanvasesQuery = z.infer<typeof listContentCanvasesQuerySchema>;
+export type ListContentLiveSessionsQuery = z.infer<typeof listContentLiveSessionsQuerySchema>;
+export type ListContentExportsQuery = z.infer<typeof listContentExportsQuerySchema>;

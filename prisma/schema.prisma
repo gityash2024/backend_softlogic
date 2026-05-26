@@ -14,6 +14,7 @@ model User {
   name                  String?
   avatar                String?
   googleId              String?                  @unique
+  passwordHash          String?
   isEmailVerified       Boolean                  @default(false)
   role                  UserRole                 @default(STUDENT)
   status                UserStatus               @default(ACTIVE)
@@ -577,4 +578,48 @@ model LmsSyncJob {
 
   @@index([userId, status])
   @@map("lms_sync_jobs")
+}
+
+model FeedbackThread {
+  id                 String               @id @default(uuid())
+  resourceType       String
+  resourceId         String
+  anchor             Json?
+  status             FeedbackThreadStatus @default(OPEN)
+  authorClientId     String
+  authorName         String
+  authorEmail        String
+  createdAt          DateTime             @default(now())
+  updatedAt          DateTime             @updatedAt
+  resolvedAt         DateTime?
+  resolvedByClientId String?
+  resolvedByName     String?
+
+  comments FeedbackComment[]
+
+  @@index([resourceType, resourceId])
+  @@index([status])
+  @@map("feedback_threads")
+}
+
+model FeedbackComment {
+  id             String    @id @default(uuid())
+  threadId       String
+  authorClientId String
+  authorName     String
+  authorEmail    String
+  body           String
+  editedAt       DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  thread FeedbackThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+
+  @@index([threadId])
+  @@map("feedback_comments")
+}
+
+enum FeedbackThreadStatus {
+  OPEN
+  RESOLVED
 }

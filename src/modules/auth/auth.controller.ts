@@ -24,6 +24,17 @@ export class AuthController {
     }
   }
 
+  async adminLogin(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const { email, password } = req.body;
+      const ipAddress = req.ip;
+      const result = await authService.adminLogin(email, password, ipAddress);
+      ApiResponse.success(res, result, 'Admin login successful');
+    } catch (error) {
+      next(error);
+    }
+  }
+
   async googleSignIn(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const { idToken } = req.body;

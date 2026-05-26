@@ -18,6 +18,7 @@ const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
   PORT: z.coerce.number().default(3000),
   API_VERSION: z.string().default('v1'),
+  CORS_ALLOWED_ORIGINS: optionalString,
 
   // Database
   DATABASE_URL: z.string().url(),

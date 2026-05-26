@@ -24,6 +24,7 @@ import { integrationsRoutes } from './modules/integrations/integrations.routes';
 import { integrationsController } from './modules/integrations/integrations.controller';
 import { mediaRoutes } from './modules/media/media.routes';
 import { i18nRoutes } from './modules/i18n/i18n.routes';
+import { feedbackRoutes } from './modules/feedback/feedback.routes';
 import {
   chatRoutes,
   assessmentsRoutes,
@@ -112,6 +113,7 @@ export const createApp = (): express.Application => {
   app.use(`${apiPrefix}/filter`, filterRoutes);
   app.use(`${apiPrefix}/admin`, adminRoutes);
   app.use(`${apiPrefix}/i18n`, i18nRoutes);
+  app.use(`${apiPrefix}/feedback`, feedbackRoutes);
   app.use(`${apiPrefix}/classroom`, classroomRoutes);
   app.use(`${apiPrefix}/live-sessions`, liveSessionRoutes);
 
