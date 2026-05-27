@@ -87,17 +87,45 @@ const asJsonObject = (
 const asString = (value: unknown): string =>
   typeof value === 'string' ? value : '';
 
+const aiSettingString = (
+  ai: Record<string, unknown>,
+  root: Record<string, unknown>,
+  canonicalKey: string,
+  legacyKey?: string,
+): string =>
+  asString(
+    ai[canonicalKey] ??
+      (legacyKey ? ai[legacyKey] : undefined) ??
+      root[canonicalKey] ??
+      (legacyKey ? root[legacyKey] : undefined),
+  );
+
 const toOrganizationAiSettings = (
   settings: Prisma.JsonValue | null | undefined,
 ): OrganizationAiSettings | null => {
   const root = asJsonObject(settings);
   const ai = asJsonObject(root.ai as Prisma.JsonValue | null | undefined);
   const summary = {
-    geminiApiKey: asString(ai.geminiApiKey ?? root.geminiApiKey),
-    geminiTextModel: asString(ai.geminiTextModel ?? root.geminiTextModel),
-    geminiImageModel: asString(ai.geminiImageModel ?? root.geminiImageModel),
-    geminiTtsModel: asString(ai.geminiTtsModel ?? root.geminiTtsModel),
-    deepgramApiKey: asString(ai.deepgramApiKey ?? root.deepgramApiKey),
+    geminiApiKey: aiSettingString(ai, root, 'geminiApiKey'),
+    geminiTextModel: aiSettingString(
+      ai,
+      root,
+      'geminiTextModel',
+      'textModel',
+    ),
+    geminiImageModel: aiSettingString(
+      ai,
+      root,
+      'geminiImageModel',
+      'imageModel',
+    ),
+    geminiTtsModel: aiSettingString(
+      ai,
+      root,
+      'geminiTtsModel',
+      'ttsModel',
+    ),
+    deepgramApiKey: aiSettingString(ai, root, 'deepgramApiKey'),
   };
 
   return Object.values(summary).some((value) => value.trim().length > 0)
