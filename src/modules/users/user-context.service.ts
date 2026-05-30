@@ -6,6 +6,9 @@ import {
   Prisma,
   Subscription,
   SubscriptionStatus,
+  BrandingMode,
+  OrganizationStorageProvider,
+  OrganizationStorageStatus,
   User,
   UserRole,
   UserStatus,
@@ -32,6 +35,7 @@ export interface SubscriptionSummary {
   status: SubscriptionStatus;
   seatLimit: number;
   seatUsage: number;
+  brandingMode: BrandingMode;
   startDate: Date;
   endDate: Date | null;
   organizationId: string | null;
@@ -46,6 +50,20 @@ export interface OrganizationSummary {
   kind: OrganizationKind;
   status: OrganizationStatus;
   parentOrganizationId: string | null;
+  brandingMode: BrandingMode;
+  brandName: string | null;
+  brandPrimaryColor: string | null;
+  brandAccentColor: string | null;
+  studentLoginEnabled: boolean;
+  parentLoginEnabled: boolean;
+  sessionOnlyJoinEnabled: boolean;
+  teacherOnlyMode: boolean;
+  supportEmail: string | null;
+  supportPhone: string | null;
+  storageProviders: OrganizationStorageProvider[];
+  defaultStorageProvider: OrganizationStorageProvider | null;
+  storageProvider: OrganizationStorageProvider | null;
+  storageStatus: OrganizationStorageStatus;
   aiSettings: OrganizationAiSettings | null;
 }
 
@@ -141,6 +159,20 @@ const toOrganizationSummary = (organization: Organization): OrganizationSummary 
   kind: organization.kind,
   status: organization.status,
   parentOrganizationId: organization.parentOrganizationId,
+  brandingMode: organization.brandingMode,
+  brandName: organization.brandName ?? null,
+  brandPrimaryColor: organization.brandPrimaryColor ?? null,
+  brandAccentColor: organization.brandAccentColor ?? null,
+  studentLoginEnabled: organization.studentLoginEnabled,
+  parentLoginEnabled: organization.parentLoginEnabled,
+  sessionOnlyJoinEnabled: organization.sessionOnlyJoinEnabled,
+  teacherOnlyMode: organization.teacherOnlyMode,
+  supportEmail: organization.supportEmail ?? null,
+  supportPhone: organization.supportPhone ?? null,
+  storageProviders: organization.storageProviders ?? [],
+  defaultStorageProvider: organization.storageProvider ?? null,
+  storageProvider: organization.storageProvider ?? null,
+  storageStatus: organization.storageStatus,
   aiSettings: toOrganizationAiSettings(organization.settings),
 });
 
@@ -155,6 +187,7 @@ const toSubscriptionSummary = (
     id: subscription.id,
     planName: subscription.planName,
     status: subscription.status,
+    brandingMode: subscription.brandingMode,
     seatLimit: subscription.seatLimit,
     seatUsage: subscription.seatUsage,
     startDate: subscription.startDate,
@@ -168,10 +201,10 @@ const dedupeOrganizations = (
   memberships: Array<OrganizationMembership & { organization: Organization }>,
   primaryOrganization: Organization | null,
 ): OrganizationSummary[] => {
-  const summaries = memberships.map((membership) =>
-    toOrganizationSummary(membership.organization),
-  );
-  if (primaryOrganization) {
+  const summaries = memberships
+    .filter((membership) => !membership.organization.deletedAt)
+    .map((membership) => toOrganizationSummary(membership.organization));
+  if (primaryOrganization && !primaryOrganization.deletedAt) {
     summaries.push(toOrganizationSummary(primaryOrganization));
   }
 
@@ -185,25 +218,32 @@ const dedupeOrganizations = (
 export const toSafeUserContext = (
   user: UserContextRecord,
   organizationSubscription?: Subscription | null,
-): SafeUserContext => ({
-  id: user.id,
-  email: user.email,
-  name: user.name,
-  avatar: user.avatar,
-  role: user.role,
-  status: user.status,
-  isEmailVerified: user.isEmailVerified,
-  timezone: user.timezone,
-  language: user.language,
-  createdAt: user.createdAt,
-  invitedAt: user.invitedAt,
-  lastLoginAt: user.lastLoginAt ?? null,
-  primaryOrganization: user.primaryOrganization
-    ? toOrganizationSummary(user.primaryOrganization)
-    : null,
-  organizations: dedupeOrganizations(user.memberships, user.primaryOrganization),
-  subscription: toSubscriptionSummary(user.subscriptions[0] ?? organizationSubscription),
-});
+): SafeUserContext => {
+  const primaryOrganization =
+    user.primaryOrganization && !user.primaryOrganization.deletedAt
+      ? user.primaryOrganization
+      : null;
+
+  return {
+    id: user.id,
+    email: user.email,
+    name: user.name,
+    avatar: user.avatar,
+    role: user.role,
+    status: user.status,
+    isEmailVerified: user.isEmailVerified,
+    timezone: user.timezone,
+    language: user.language,
+    createdAt: user.createdAt,
+    invitedAt: user.invitedAt,
+    lastLoginAt: user.lastLoginAt ?? null,
+    primaryOrganization: primaryOrganization
+      ? toOrganizationSummary(primaryOrganization)
+      : null,
+    organizations: dedupeOrganizations(user.memberships, primaryOrganization),
+    subscription: toSubscriptionSummary(user.subscriptions[0] ?? organizationSubscription),
+  };
+};
 
 export const findUserContextById = async (
   userId: string,
@@ -213,11 +253,16 @@ export const findUserContextById = async (
     include: userContextInclude,
   });
 
-  if (!user) {
+  if (!user || user.deletedAt) {
     return null;
   }
 
-  const organizationId = user.primaryOrganizationId ?? user.memberships[0]?.organizationId;
+  const organizationId =
+    (user.primaryOrganization && !user.primaryOrganization.deletedAt
+      ? user.primaryOrganizationId
+      : null) ??
+    user.memberships.find((membership) => !membership.organization.deletedAt)
+      ?.organizationId;
   const organizationSubscription = organizationId
     ? await prisma.subscription.findFirst({
         where: { organizationId },

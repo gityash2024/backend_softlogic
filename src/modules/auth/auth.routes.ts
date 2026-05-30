@@ -1,8 +1,23 @@
 import { Router } from 'express';
 import { authController } from './auth.controller';
 import { validate } from '@/shared/middleware/validation.middleware';
-import { sendOtpSchema, verifyOtpSchema, googleSignInSchema, refreshTokenSchema, adminLoginSchema } from './auth.validator';
-import { authRateLimiter, otpRateLimiter } from '@/shared/middleware/rate-limit.middleware';
+import { authMiddleware } from '@/shared/middleware/auth.middleware';
+import {
+  adminLoginSchema,
+  changePasswordSchema,
+  completePasswordSetupSchema,
+  googleSignInSchema,
+  passwordResetRequestSchema,
+  passwordSetupTokenSchema,
+  refreshTokenSchema,
+  sendOtpSchema,
+  verifyOtpSchema,
+} from './auth.validator';
+import {
+  authRateLimiter,
+  otpRateLimiter,
+  passwordResetEmailLimiter,
+} from '@/shared/middleware/rate-limit.middleware';
 
 const router = Router();
 
@@ -85,6 +100,33 @@ router.post('/verify-otp', authRateLimiter, validate(verifyOtpSchema), authContr
  *         description: Account not authorized for admin panel access
  */
 router.post('/admin/login', authRateLimiter, validate(adminLoginSchema), authController.adminLogin);
+
+router.post(
+  '/admin/password-setup/validate',
+  authRateLimiter,
+  validate(passwordSetupTokenSchema),
+  authController.validatePasswordSetup,
+);
+router.post(
+  '/admin/password-setup/complete',
+  authRateLimiter,
+  validate(completePasswordSetupSchema),
+  authController.completePasswordSetup,
+);
+router.post(
+  '/admin/password/change',
+  authRateLimiter,
+  authMiddleware,
+  validate(changePasswordSchema),
+  authController.changePassword,
+);
+router.post(
+  '/admin/password-reset/request',
+  authRateLimiter,
+  passwordResetEmailLimiter,
+  validate(passwordResetRequestSchema),
+  authController.requestPasswordReset,
+);
 
 /**
  * @swagger

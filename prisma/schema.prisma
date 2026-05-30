@@ -24,6 +24,7 @@ model User {
   lastLoginAt           DateTime?
   invitedById           String?
   primaryOrganizationId String?
+  archivedEmail         String?
   createdAt             DateTime                 @default(now())
   updatedAt             DateTime                 @updatedAt
   deletedAt             DateTime?
@@ -37,7 +38,8 @@ model User {
   userSettings          UserSettings?
   memberships           OrganizationMembership[]
   exports               Export[]
-  subscriptions         Subscription[]
+  subscriptions         Subscription[]           @relation("SubscriptionOwner")
+  subscriptionsCreated  Subscription[]           @relation("SubscriptionCreatedBy")
   auditLogs             AdminAuditLog[]          @relation("AuditActor")
   liveSessionsCreated   LiveSession[]            @relation("LiveSessionCreator")
   liveSessionsHosted    LiveSession[]            @relation("LiveSessionHost")
@@ -51,6 +53,23 @@ model User {
   lmsConnections         LmsConnection[]
   lmsSyncJobs            LmsSyncJob[]
   googleDesktopAuthAttempts GoogleDesktopAuthAttempt[]
+  parentLinks            ParentStudentLink[]    @relation("ParentLinks")
+  studentParentLinks     ParentStudentLink[]    @relation("StudentParentLinks")
+  storageConnectionsConnected OrganizationStorageConnection[] @relation("StorageConnectionsConnectedBy")
+  checkoutSessionsCreated CheckoutSession[]     @relation("CheckoutSessionsCreatedBy")
+  paymentTransactionsRecorded PaymentTransaction[] @relation("PaymentTransactionsRecordedBy")
+  hardwareKeysAssigned   HardwareActivationKey[] @relation("HardwareKeysAssignedUser")
+  hardwareKeysCreated    HardwareActivationKey[] @relation("HardwareKeysCreatedBy")
+  hardwareActivations    HardwareActivation[]   @relation("HardwareActivationsUser")
+  hardwareResetsApproved HardwareActivation[]   @relation("HardwareActivationsResetApprovedBy")
+  aiCreditAccounts       AiCreditAccount[]      @relation("AiCreditAccountsUser")
+  aiCreditLedgerEntries  AiCreditLedgerEntry[]  @relation("AiCreditLedgerActor")
+  termsAcceptances       TermsAcceptance[]      @relation("TermsAcceptancesUser")
+  primaryAdminOrganizations Organization[]      @relation("OrganizationPrimaryAdmin")
+  supportThreadsOpened    SupportThread[]        @relation("SupportThreadsOpened")
+  supportThreadsResolved  SupportThread[]        @relation("SupportThreadsResolved")
+  supportMessagesAuthored SupportMessage[]       @relation("SupportMessagesAuthored")
+  supportThreadEventsActor SupportThreadEvent[]  @relation("SupportThreadEventsActor")
 
   @@map("users")
 }
@@ -58,6 +77,7 @@ model User {
 enum UserRole {
   STUDENT
   TEACHER
+  PARENT
   CUSTOMER_ADMIN
   PARTNER_ADMIN
   ADMIN
@@ -75,22 +95,52 @@ model Organization {
   slug               String                 @unique
   kind               OrganizationKind       @default(CUSTOMER)
   status             OrganizationStatus     @default(ACTIVE)
+  brandingMode       BrandingMode           @default(SOFTLOGIC)
+  studentLoginEnabled Boolean                @default(false)
+  parentLoginEnabled  Boolean                @default(false)
+  sessionOnlyJoinEnabled Boolean             @default(true)
+  teacherOnlyMode    Boolean                @default(false)
+  supportEmail       String?
+  supportPhone       String?
+  primaryAdminUserId String?
+  archivedSlug       String?
+  archivedSupportEmail String?
+  storageProviders   OrganizationStorageProvider[] @default([])
+  storageProvider    OrganizationStorageProvider?
+  storageStatus      OrganizationStorageStatus @default(NOT_CONFIGURED)
   logoUrl            String?
   logoPublicId       String?
+  brandName          String?
+  brandPrimaryColor  String?
+  brandAccentColor   String?
   settings           Json                   @default("{}")
   parentOrganizationId String?
   createdAt          DateTime               @default(now())
   updatedAt          DateTime               @updatedAt
+  deletedAt          DateTime?
 
   parentOrganization Organization?          @relation("OrganizationHierarchy", fields: [parentOrganizationId], references: [id], onDelete: SetNull)
   childOrganizations Organization[]         @relation("OrganizationHierarchy")
+  primaryAdminUser   User?                  @relation("OrganizationPrimaryAdmin", fields: [primaryAdminUserId], references: [id], onDelete: SetNull)
   memberships        OrganizationMembership[]
   primaryUsers       User[]                 @relation("PrimaryOrganization")
   canvases           Canvas[]
   subscriptions      Subscription[]
   liveSessions       LiveSession[]
+  parentStudentLinks ParentStudentLink[]
+  storageConnections OrganizationStorageConnection[]
+  aiCreditAccounts   AiCreditAccount[]
+  hardwareActivationKeys HardwareActivationKey[]
+  hardwareActivations HardwareActivation[]
+  checkoutSessions   CheckoutSession[]
+  paymentTransactions PaymentTransaction[]
+  liveSessionGuestParticipants LiveSessionGuestParticipant[]
+  termsAcceptances TermsAcceptance[]
+  supportThreads SupportThread[]
 
   @@map("organizations")
+  @@index([primaryAdminUserId])
+  @@index([deletedAt])
 }
 
 enum OrganizationKind {
@@ -102,6 +152,26 @@ enum OrganizationKind {
 enum OrganizationStatus {
   ACTIVE
   INACTIVE
+}
+
+enum BrandingMode {
+  SOFTLOGIC
+  SOFTLOGIC_PARTNER
+  WHITE_LABEL
+  MULTI_BRAND
+}
+
+enum OrganizationStorageProvider {
+  GOOGLE_DRIVE
+  DROPBOX
+  ONEDRIVE
+}
+
+enum OrganizationStorageStatus {
+  NOT_CONFIGURED
+  PENDING
+  CONNECTED
+  INVALID
 }
 
 model OrganizationMembership {
@@ -302,20 +372,30 @@ model Subscription {
   id             String             @id @default(uuid())
   organizationId String?
   userId         String?
+  createdById    String?
   planName       String
   status         SubscriptionStatus @default(ACTIVE)
+  brandingMode   BrandingMode       @default(SOFTLOGIC)
   seatLimit      Int                @default(1)
   seatUsage      Int                @default(0)
+  seatAlertTier        Int?
+  expiryReminderTier   Int?
   startDate      DateTime
   endDate        DateTime?
   createdAt      DateTime           @default(now())
   updatedAt      DateTime           @updatedAt
+  deletedAt      DateTime?
 
   organization Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
-  user         User?         @relation(fields: [userId], references: [id], onDelete: SetNull)
+  user         User?         @relation("SubscriptionOwner", fields: [userId], references: [id], onDelete: SetNull)
+  createdBy    User?         @relation("SubscriptionCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  checkoutSessions CheckoutSession[]
+  paymentTransactions PaymentTransaction[]
+  hardwareActivationKeys HardwareActivationKey[]
 
   @@index([organizationId])
   @@index([userId])
+  @@index([createdById])
   @@map("subscriptions")
 }
 
@@ -324,6 +404,35 @@ enum SubscriptionStatus {
   EXPIRED
   CANCELED
   TRIAL
+  // Appended LAST on purpose: Postgres orders enums by declaration order and
+  // findUserContextById sorts subscriptions by `status asc` with no status
+  // filter, so keeping PENDING_APPROVAL last prevents a pending subscription
+  // from shadowing a real ACTIVE one in the user's /me context.
+  PENDING_APPROVAL
+}
+
+model ParentStudentLink {
+  id             String   @id @default(uuid())
+  parentUserId   String
+  studentUserId  String
+  organizationId String
+  status         ParentStudentLinkStatus @default(ACTIVE)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  parentUser   User         @relation("ParentLinks", fields: [parentUserId], references: [id], onDelete: Cascade)
+  studentUser  User         @relation("StudentParentLinks", fields: [studentUserId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([parentUserId, studentUserId, organizationId])
+  @@index([organizationId])
+  @@index([studentUserId])
+  @@map("parent_student_links")
+}
+
+enum ParentStudentLinkStatus {
+  ACTIVE
+  DISABLED
 }
 
 model AdminAuditLog {
@@ -340,6 +449,292 @@ model AdminAuditLog {
 
   @@index([actorUserId])
   @@map("admin_audit_logs")
+}
+
+model OrganizationStorageConnection {
+  id               String   @id @default(uuid())
+  organizationId   String
+  provider         OrganizationStorageProvider
+  status           OrganizationStorageStatus @default(PENDING)
+  encryptedTokens  String?
+  externalAccountEmail String?
+  rootFolderId     String?
+  connectedById    String?
+  validatedAt      DateTime?
+  disconnectedAt   DateTime?
+  lastError        String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  connectedBy  User?        @relation("StorageConnectionsConnectedBy", fields: [connectedById], references: [id], onDelete: SetNull)
+
+  @@unique([organizationId, provider])
+  @@index([status])
+  @@map("organization_storage_connections")
+}
+
+model PaymentProviderConfig {
+  id          String          @id @default(uuid())
+  provider    PaymentProvider @unique
+  enabled     Boolean         @default(false)
+  mode        PaymentProviderMode @default(TEST)
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  checkoutSessions CheckoutSession[]
+  paymentTransactions PaymentTransaction[]
+
+  @@map("payment_provider_configs")
+}
+
+enum PaymentProvider {
+  MANUAL
+}
+
+enum PaymentProviderMode {
+  TEST
+  LIVE
+}
+
+model CheckoutSession {
+  id             String   @id @default(uuid())
+  provider       PaymentProvider
+  providerConfigId String?
+  organizationId String?
+  subscriptionId String?
+  status         CheckoutSessionStatus @default(PENDING)
+  checkoutUrl    String?
+  amountMinor    Int
+  currency       String @default("INR")
+  metadata       Json   @default("{}")
+  createdById    String
+  expiresAt      DateTime?
+  completedAt    DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  providerConfig PaymentProviderConfig? @relation(fields: [providerConfigId], references: [id], onDelete: SetNull)
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  subscription   Subscription? @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
+  createdBy      User @relation("CheckoutSessionsCreatedBy", fields: [createdById], references: [id], onDelete: Cascade)
+  paymentTransactions PaymentTransaction[]
+
+  @@index([organizationId])
+  @@index([subscriptionId])
+  @@index([status])
+  @@map("checkout_sessions")
+}
+
+enum CheckoutSessionStatus {
+  PENDING
+  COMPLETED
+  EXPIRED
+  CANCELED
+}
+
+model PaymentTransaction {
+  id             String   @id @default(uuid())
+  provider       PaymentProvider
+  providerConfigId String?
+  checkoutSessionId String?
+  organizationId String?
+  subscriptionId String?
+  status         PaymentTransactionStatus @default(PENDING)
+  amountMinor    Int
+  currency       String @default("INR")
+  externalPaymentId String?
+  referenceNote  String?
+  invoiceNumber  String?
+  periodStart    DateTime?
+  periodEnd      DateTime?
+  metadata       Json @default("{}")
+  recordedById   String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  providerConfig PaymentProviderConfig? @relation(fields: [providerConfigId], references: [id], onDelete: SetNull)
+  checkoutSession CheckoutSession? @relation(fields: [checkoutSessionId], references: [id], onDelete: SetNull)
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  subscription   Subscription? @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
+  recordedBy     User? @relation("PaymentTransactionsRecordedBy", fields: [recordedById], references: [id], onDelete: SetNull)
+
+  @@index([organizationId])
+  @@index([subscriptionId])
+  @@index([status])
+  @@map("payment_transactions")
+}
+
+enum PaymentTransactionStatus {
+  PENDING
+  PAID
+  FAILED
+  REFUNDED
+  MANUAL_APPROVED
+}
+
+model HardwareActivationKey {
+  id             String   @id @default(uuid())
+  organizationId String
+  subscriptionId String?
+  activationKeyHash String @unique
+  activationKeyEncrypted String?
+  label          String?
+  status         HardwareActivationKeyStatus @default(AVAILABLE)
+  maxDevices     Int      @default(1)
+  assignedUserId String?
+  createdById    String
+  boundActivationId String?
+  expiresAt      DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  subscription Subscription? @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
+  assignedUser User? @relation("HardwareKeysAssignedUser", fields: [assignedUserId], references: [id], onDelete: SetNull)
+  createdBy    User @relation("HardwareKeysCreatedBy", fields: [createdById], references: [id], onDelete: Cascade)
+  boundActivation HardwareActivation? @relation("BoundHardwareActivation", fields: [boundActivationId], references: [id], onDelete: SetNull)
+  activations HardwareActivation[] @relation("HardwareKeyActivations")
+  aiCreditAccounts AiCreditAccount[]
+
+  @@index([organizationId])
+  @@index([subscriptionId])
+  @@index([status])
+  @@map("hardware_activation_keys")
+}
+
+enum HardwareActivationKeyStatus {
+  AVAILABLE
+  BOUND
+  DISABLED
+  EXPIRED
+}
+
+model HardwareActivation {
+  id             String   @id @default(uuid())
+  activationKeyId String
+  userId         String?
+  organizationId String
+  deviceFingerprintHash String
+  deviceLabel    String?
+  devicePlatform String?
+  deviceModel    String?
+  deviceOsVersion String?
+  deviceMeta     Json     @default("{}")
+  firstBoundAt   DateTime?
+  lastVerifiedAt DateTime?
+  status         HardwareActivationStatus @default(ACTIVE)
+  resetRequestedAt DateTime?
+  resetApprovedAt DateTime?
+  resetApprovedById String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  activationKey HardwareActivationKey @relation("HardwareKeyActivations", fields: [activationKeyId], references: [id], onDelete: Cascade)
+  boundKeys HardwareActivationKey[] @relation("BoundHardwareActivation")
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user      User? @relation("HardwareActivationsUser", fields: [userId], references: [id], onDelete: SetNull)
+  resetApprovedBy User? @relation("HardwareActivationsResetApprovedBy", fields: [resetApprovedById], references: [id], onDelete: SetNull)
+
+  @@unique([activationKeyId, deviceFingerprintHash])
+  @@index([organizationId])
+  @@index([userId])
+  @@map("hardware_activations")
+}
+
+enum HardwareActivationStatus {
+  ACTIVE
+  RESET_REQUESTED
+  RESET
+  DISABLED
+}
+
+model AiCreditAccount {
+  id             String   @id @default(uuid())
+  scope          AiCreditScope
+  organizationId String?
+  userId         String?
+  hardwareActivationKeyId String?
+  balanceMinor   Int      @default(0)
+  includedMinor  Int      @default(70000)
+  currency       String   @default("INR")
+  status         AiCreditAccountStatus @default(ACTIVE)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User? @relation("AiCreditAccountsUser", fields: [userId], references: [id], onDelete: Cascade)
+  hardwareActivationKey HardwareActivationKey? @relation(fields: [hardwareActivationKeyId], references: [id], onDelete: SetNull)
+  ledgerEntries AiCreditLedgerEntry[]
+
+  @@index([organizationId])
+  @@index([userId])
+  @@index([scope])
+  @@map("ai_credit_accounts")
+}
+
+enum AiCreditScope {
+  ORGANIZATION
+  USER
+  HARDWARE
+}
+
+enum AiCreditAccountStatus {
+  ACTIVE
+  EXHAUSTED
+  DISABLED
+}
+
+model AiCreditLedgerEntry {
+  id             String   @id @default(uuid())
+  accountId      String
+  actorUserId    String?
+  type           AiCreditLedgerType
+  amountMinor    Int
+  oldBalanceMinor Int
+  newBalanceMinor Int
+  reason         String?
+  referenceNote  String?
+  metadata       Json @default("{}")
+  createdAt      DateTime @default(now())
+
+  account   AiCreditAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  actorUser User? @relation("AiCreditLedgerActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([accountId])
+  @@index([actorUserId])
+  @@map("ai_credit_ledger_entries")
+}
+
+enum AiCreditLedgerType {
+  INCLUDED
+  USAGE
+  MANUAL_EXTENSION
+  ADJUSTMENT
+}
+
+model TermsAcceptance {
+  id             String   @id @default(uuid())
+  userId         String
+  organizationId String?
+  documentType   TermsDocumentType
+  documentVersion String
+  acceptedAt     DateTime @default(now())
+  ipAddress      String?
+  userAgent      String?
+  metadata       Json @default("{}")
+
+  user User @relation("TermsAcceptancesUser", fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([organizationId])
+  @@map("terms_acceptances")
+}
+
+enum TermsDocumentType {
+  TERMS
+  PRIVACY
 }
 
 model LiveSession {
@@ -369,6 +764,7 @@ model LiveSession {
   mediaAssets  LiveSessionMediaAsset[]
   recordings   LiveSessionRecording[]
   events       LiveSessionEvent[]
+  guestParticipants LiveSessionGuestParticipant[]
 
   @@index([canvasId])
   @@index([organizationId])
@@ -397,6 +793,28 @@ model LiveSessionParticipant {
   @@unique([liveSessionId, userId])
   @@index([userId])
   @@map("live_session_participants")
+}
+
+model LiveSessionGuestParticipant {
+  id             String   @id @default(uuid())
+  liveSessionId  String
+  organizationId String?
+  displayName    String?
+  joinTokenHash   String @unique
+  role            LiveSessionParticipantRole @default(STUDENT)
+  expiresAt       DateTime
+  joinedAt        DateTime?
+  leftAt          DateTime?
+  metadata        Json @default("{}")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  liveSession  LiveSession @relation(fields: [liveSessionId], references: [id], onDelete: Cascade)
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+
+  @@index([liveSessionId])
+  @@index([organizationId])
+  @@map("live_session_guest_participants")
 }
 
 enum LiveSessionParticipantRole {
@@ -622,4 +1040,94 @@ model FeedbackComment {
 enum FeedbackThreadStatus {
   OPEN
   RESOLVED
+}
+
+model SupportThread {
+  id               String              @id @default(uuid())
+  organizationId   String
+  openedByUserId   String
+  category         SupportCategory
+  subject          String
+  status           SupportThreadStatus @default(OPEN)
+  priority         SupportPriority     @default(NORMAL)
+  requestedAction  Json?
+  resolvedByUserId String?
+  resolvedAt       DateTime?
+  closedAt         DateTime?
+  lastActivityAt   DateTime            @default(now())
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
+
+  organization Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  openedBy     User                @relation("SupportThreadsOpened", fields: [openedByUserId], references: [id], onDelete: Cascade)
+  resolvedBy   User?               @relation("SupportThreadsResolved", fields: [resolvedByUserId], references: [id], onDelete: SetNull)
+  messages     SupportMessage[]
+  events       SupportThreadEvent[]
+
+  @@index([organizationId, status])
+  @@index([status, lastActivityAt])
+  @@map("support_threads")
+}
+
+model SupportMessage {
+  id           String    @id @default(uuid())
+  threadId     String
+  authorUserId String
+  body         String
+  editedAt     DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  thread SupportThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  author User          @relation("SupportMessagesAuthored", fields: [authorUserId], references: [id], onDelete: Cascade)
+
+  @@index([threadId])
+  @@map("support_messages")
+}
+
+model SupportThreadEvent {
+  id          String           @id @default(uuid())
+  threadId    String
+  actorUserId String
+  type        SupportEventType
+  payload     Json             @default("{}")
+  createdAt   DateTime         @default(now())
+
+  thread SupportThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  actor  User          @relation("SupportThreadEventsActor", fields: [actorUserId], references: [id], onDelete: Cascade)
+
+  @@index([threadId])
+  @@map("support_thread_events")
+}
+
+enum SupportCategory {
+  REQUEST_SEATS
+  EXTEND_SUBSCRIPTION
+  RESET_DEVICE
+  BILLING
+  ACTIVATION_ISSUE
+  TECHNICAL
+  USER_MANAGEMENT
+  GENERAL
+}
+
+enum SupportThreadStatus {
+  OPEN
+  IN_PROGRESS
+  RESOLVED
+  CLOSED
+}
+
+enum SupportPriority {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
+}
+
+enum SupportEventType {
+  STATUS_CHANGE
+  ACTION_APPLIED
+  PRIORITY_CHANGE
+  REPLIED
 }

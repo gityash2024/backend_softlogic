@@ -1,15 +1,27 @@
 import {
+  BrandingMode,
+  AiCreditAccountStatus,
+  CheckoutSessionStatus,
   ExportFormat,
   ExportStatus,
+  HardwareActivationKeyStatus,
+  HardwareActivationStatus,
   LiveSessionStatus,
   OrganizationKind,
+  OrganizationStorageProvider,
+  OrganizationStorageStatus,
+  OtpType,
+  PaymentProvider,
+  PaymentProviderMode,
   OrganizationStatus,
   Prisma,
   SubscriptionStatus,
   UserRole,
   UserStatus,
 } from '@prisma/client';
-import { prisma } from '@/config';
+import bcrypt from 'bcrypt';
+import { randomBytes } from 'crypto';
+import { env, prisma } from '@/config';
 import {
   AuthenticatedUserLike,
   canManageRole,
@@ -18,10 +30,21 @@ import {
 } from '@/shared/utils/access-control';
 import { AppError } from '@/shared/errors/AppError';
 import { findUserContextById } from '@/modules/users/user-context.service';
+import { licensingService } from '@/modules/licensing/licensing.service';
+import { authRepository } from '@/modules/auth/auth.repository';
 import { deleteImageAsset, uploadImageBuffer } from '@/shared/services/cloudinary.service';
-import { sendWelcomeEmail } from '@/shared/utils/email';
+import {
+  sendPasswordSetupEmail,
+  sendSessionsRevokedEmail,
+  sendSubscriptionApprovedEmail,
+  sendSubscriptionPendingEmail,
+  sendSubscriptionRejectedEmail,
+  sendWelcomeEmail,
+} from '@/shared/utils/email';
+import { generateAccessToken } from '@/shared/utils/jwt';
 import { buildAdminExport, type AdminExportFormat } from './admin-export.util';
 import type {
+  BulkInviteInput,
   ListActivityQuery,
   ListContentCanvasesQuery,
   ListContentExportsQuery,
@@ -36,6 +59,20 @@ interface CreateOrganizationInput {
   slug?: string;
   kind?: OrganizationKind;
   parentOrganizationId?: string | null;
+  brandingMode?: BrandingMode;
+  studentLoginEnabled?: boolean;
+  parentLoginEnabled?: boolean;
+  sessionOnlyJoinEnabled?: boolean;
+  teacherOnlyMode?: boolean;
+  supportEmail?: string | null;
+  supportPhone?: string | null;
+  storageProviders?: OrganizationStorageProvider[];
+  defaultStorageProvider?: OrganizationStorageProvider | null;
+  storageProvider?: OrganizationStorageProvider | null;
+  storageStatus?: OrganizationStorageStatus;
+  brandName?: string | null;
+  brandPrimaryColor?: string | null;
+  brandAccentColor?: string | null;
 }
 
 interface UpdateOrganizationInput {
@@ -43,7 +80,29 @@ interface UpdateOrganizationInput {
   slug?: string;
   status?: OrganizationStatus;
   settings?: Record<string, unknown>;
+  brandingMode?: BrandingMode;
+  studentLoginEnabled?: boolean;
+  parentLoginEnabled?: boolean;
+  sessionOnlyJoinEnabled?: boolean;
+  teacherOnlyMode?: boolean;
+  supportEmail?: string | null;
+  supportPhone?: string | null;
+  storageProviders?: OrganizationStorageProvider[];
+  defaultStorageProvider?: OrganizationStorageProvider | null;
+  storageProvider?: OrganizationStorageProvider | null;
+  storageStatus?: OrganizationStorageStatus;
+  brandName?: string | null;
+  brandPrimaryColor?: string | null;
+  brandAccentColor?: string | null;
 }
+
+type PasswordSetupEmailPayload = {
+  to: string;
+  name: string | null;
+  role: UserRole;
+  organizationName?: string | null;
+  setupUrl: string;
+};
 
 interface CreateUserInput {
   email: string;
@@ -53,6 +112,7 @@ interface CreateUserInput {
   organizationId?: string | null;
   timezone?: string;
   language?: string;
+  linkedStudentIds?: string[];
 }
 
 interface UpdateUserInput {
@@ -62,6 +122,29 @@ interface UpdateUserInput {
   organizationId?: string | null;
   timezone?: string;
   language?: string;
+  linkedStudentIds?: string[];
+}
+
+interface DeleteUserResult {
+  id: string;
+  deletedAt: Date;
+  archivedEmail: string;
+  affectedOrganizationIds: string[];
+  licenseSnapshots: Record<string, unknown>;
+}
+
+interface DeleteOrganizationResult {
+  id: string;
+  deletedAt: Date;
+  archivedSlug: string;
+  archivedSupportEmail: string | null;
+  affectedUserCount: number;
+  canceledSubscriptionCount: number;
+  canceledCheckoutSessionCount: number;
+  disabledHardwareKeyCount: number;
+  disabledHardwareActivationCount: number;
+  disabledAiCreditAccountCount: number;
+  disconnectedStorageConnectionCount: number;
 }
 
 interface CreateSubscriptionInput {
@@ -69,6 +152,7 @@ interface CreateSubscriptionInput {
   userId?: string | null;
   planName: string;
   status?: SubscriptionStatus;
+  brandingMode?: BrandingMode;
   seatLimit: number;
   seatUsage: number;
   startDate: Date;
@@ -78,10 +162,17 @@ interface CreateSubscriptionInput {
 interface UpdateSubscriptionInput {
   planName?: string;
   status?: SubscriptionStatus;
+  brandingMode?: BrandingMode;
   seatLimit?: number;
   seatUsage?: number;
   startDate?: Date;
   endDate?: Date | null;
+}
+
+interface UpdatePaymentProviderInput {
+  provider: PaymentProvider;
+  enabled: boolean;
+  mode?: PaymentProviderMode;
 }
 
 interface PaginatedResult<T> {
@@ -108,6 +199,7 @@ const ROLE_LABEL: Record<UserRole, string> = {
   [UserRole.CUSTOMER_ADMIN]: 'Customer Admin',
   [UserRole.ADMIN]: 'Admin',
   [UserRole.TEACHER]: 'Teacher',
+  [UserRole.PARENT]: 'Parent',
   [UserRole.STUDENT]: 'Student',
 };
 
@@ -132,6 +224,7 @@ const SUBSCRIPTION_STATUS_LABEL: Record<SubscriptionStatus, string> = {
   [SubscriptionStatus.EXPIRED]: 'Expired',
   [SubscriptionStatus.CANCELED]: 'Canceled',
   [SubscriptionStatus.TRIAL]: 'Trial',
+  [SubscriptionStatus.PENDING_APPROVAL]: 'Pending Approval',
 };
 
 const LIVE_SESSION_STATUS_LABEL: Record<LiveSessionStatus, string> = {
@@ -149,6 +242,29 @@ const EXPORT_STATUS_LABEL: Record<ExportStatus, string> = {
 };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+const PASSWORD_SETUP_EXPIRY_DAYS = 7;
+const ADMIN_ONBOARDING_ROLES = [
+  UserRole.SUPER_ADMIN,
+  UserRole.PARTNER_ADMIN,
+  UserRole.CUSTOMER_ADMIN,
+  UserRole.ADMIN,
+] as const;
+
+const normalizeEmail = (value?: string | null): string | null => {
+  const normalized = value?.trim().toLowerCase();
+  return normalized ? normalized : null;
+};
+
+const primaryAdminRoleForOrganization = (
+  kind: OrganizationKind,
+): UserRole => {
+  if (kind === OrganizationKind.PARTNER) return UserRole.PARTNER_ADMIN;
+  if (kind === OrganizationKind.INTERNAL) return UserRole.ADMIN;
+  return UserRole.CUSTOMER_ADMIN;
+};
+
+const isAdminOnboardingRole = (role: UserRole): boolean =>
+  ADMIN_ONBOARDING_ROLES.includes(role as (typeof ADMIN_ONBOARDING_ROLES)[number]);
 
 const slugify = (value: string): string =>
   value
@@ -157,6 +273,12 @@ const slugify = (value: string): string =>
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
     .slice(0, 80) || `org-${Date.now()}`;
+
+const deletedEmailFor = (id: string): string =>
+  `deleted-${id}@softlogic.local`;
+
+const archivedSlugFor = (id: string, slug: string): string =>
+  slugify(`archived-${id.slice(0, 8)}-${slug}`).slice(0, 120);
 
 const asJsonObject = (
   value: Prisma.JsonValue | null | undefined,
@@ -246,6 +368,14 @@ const csvEnumValues = <T extends string>(
   return values.length ? values : undefined;
 };
 
+const csvHasValue = (value: string | undefined, expected: string): boolean =>
+  Boolean(
+    value
+      ?.split(',')
+      .map((item) => item.trim().toUpperCase())
+      .includes(expected),
+  );
+
 const dateRange = (
   from?: Date,
   to?: Date,
@@ -287,6 +417,20 @@ const nonEmptyFilters = (query: Record<string, unknown>) =>
 export class AdminService {
   private readonly organizationInclude = {
     parentOrganization: true,
+    primaryAdminUser: {
+      select: {
+        id: true,
+        email: true,
+        name: true,
+        role: true,
+        status: true,
+        isEmailVerified: true,
+        lastLoginAt: true,
+      },
+    },
+    storageConnections: {
+      orderBy: { provider: 'asc' as const },
+    },
     subscriptions: {
       orderBy: { updatedAt: 'desc' as const },
       take: 1,
@@ -471,6 +615,7 @@ export class AdminService {
           [
             SubscriptionStatus.ACTIVE,
             SubscriptionStatus.TRIAL,
+            SubscriptionStatus.PENDING_APPROVAL,
             SubscriptionStatus.EXPIRED,
             SubscriptionStatus.CANCELED,
           ],
@@ -525,8 +670,12 @@ export class AdminService {
     options: { exportAll?: boolean } = {},
   ) {
     const managedOrganizationIds = await getManagedOrganizationIds(actor);
+    const archivedOnly = csvHasValue(query.status, 'ARCHIVED');
     const and: Prisma.OrganizationWhereInput[] = [
-      this.organizationScopeWhere(managedOrganizationIds),
+      this.organizationScopeWhere(managedOrganizationIds, {
+        includeArchived: archivedOnly,
+      }),
+      archivedOnly ? { deletedAt: { not: null } } : { deletedAt: null },
     ];
     const kinds = csvEnumValues(query.kind, [
       OrganizationKind.INTERNAL,
@@ -612,7 +761,7 @@ export class AdminService {
       where: { id: organizationId },
       include: this.organizationInclude,
     });
-    if (!organization) throw new AppError('Organization not found', 404);
+    if (!organization || organization.deletedAt) throw new AppError('Organization not found', 404);
     return organization;
   }
 
@@ -628,7 +777,12 @@ export class AdminService {
         { header: 'Name', key: 'name', width: 28, value: (row) => row.name },
         { header: 'Slug', key: 'slug', width: 24, value: (row) => row.slug },
         { header: 'Kind', key: 'kind', width: 16, value: (row) => ORGANIZATION_KIND_LABEL[row.kind] },
-        { header: 'Status', key: 'status', width: 16, value: (row) => ORGANIZATION_STATUS_LABEL[row.status] },
+        {
+          header: 'Status',
+          key: 'status',
+          width: 16,
+          value: (row) => (row.deletedAt ? 'Archived' : ORGANIZATION_STATUS_LABEL[row.status]),
+        },
         { header: 'Parent', key: 'parent', width: 28, value: (row) => row.parentOrganization?.name ?? '' },
         { header: 'Members', key: 'members', width: 12, value: (row) => row._count.memberships },
         { header: 'Canvases', key: 'canvases', width: 12, value: (row) => row._count.canvases },
@@ -659,18 +813,129 @@ export class AdminService {
       await ensureOrganizationManaged(parentOrganizationId, actor);
     }
 
-    const organization = await prisma.organization.create({
-      data: {
-        name: input.name,
-        slug: input.slug ? slugify(input.slug) : slugify(input.name),
-        kind,
-        parentOrganizationId,
-      },
-      include: this.organizationInclude,
+    const supportEmail = normalizeEmail(input.supportEmail);
+    if (supportEmail) {
+      await this.ensureSupportEmailAvailable(supportEmail);
+    }
+    const storage = this.resolveStorageSelection(input);
+
+    const setupEmails: PasswordSetupEmailPayload[] = [];
+
+    const organization = await prisma.$transaction(async (tx) => {
+      const createdOrganization = await tx.organization.create({
+        data: {
+          name: input.name,
+          slug: input.slug ? slugify(input.slug) : slugify(input.name),
+          kind,
+          parentOrganizationId,
+          brandingMode: actor.role === UserRole.SUPER_ADMIN
+            ? input.brandingMode ?? BrandingMode.SOFTLOGIC
+            : BrandingMode.SOFTLOGIC,
+          // Brand identity is a Super-Admin-only commercial control. createOrganization
+          // has no commercialKeys guard, so gate these inline just like brandingMode.
+          brandName: actor.role === UserRole.SUPER_ADMIN ? input.brandName ?? null : null,
+          brandPrimaryColor:
+            actor.role === UserRole.SUPER_ADMIN ? input.brandPrimaryColor ?? null : null,
+          brandAccentColor:
+            actor.role === UserRole.SUPER_ADMIN ? input.brandAccentColor ?? null : null,
+          studentLoginEnabled:
+            actor.role === UserRole.SUPER_ADMIN ? input.studentLoginEnabled ?? false : false,
+          parentLoginEnabled:
+            actor.role === UserRole.SUPER_ADMIN ? input.parentLoginEnabled ?? false : false,
+          sessionOnlyJoinEnabled:
+            actor.role === UserRole.SUPER_ADMIN ? input.sessionOnlyJoinEnabled ?? true : true,
+          teacherOnlyMode: input.teacherOnlyMode ?? false,
+          supportEmail,
+          supportPhone: input.supportPhone,
+          storageProviders: storage.providers,
+          storageProvider: storage.defaultProvider,
+          storageStatus: storage.status,
+          storageConnections:
+            storage.providers.length > 0
+              ? {
+                  create: storage.providers.map((provider) => ({
+                    provider,
+                    status:
+                      provider === storage.defaultProvider
+                        ? storage.status
+                        : OrganizationStorageStatus.NOT_CONFIGURED,
+                  })),
+                }
+              : undefined,
+        },
+      });
+
+      if (supportEmail) {
+        const primaryAdminRole = primaryAdminRoleForOrganization(kind);
+        const primaryAdminName = `${input.name} Admin`;
+        const primaryAdmin = await tx.user.create({
+          data: {
+            email: supportEmail,
+            name: primaryAdminName,
+            role: primaryAdminRole,
+            status: UserStatus.ACTIVE,
+            timezone: 'UTC',
+            language: 'en',
+            invitedById: actor.userId,
+            primaryOrganizationId: createdOrganization.id,
+          },
+        });
+
+        await tx.organizationMembership.create({
+          data: {
+            userId: primaryAdmin.id,
+            organizationId: createdOrganization.id,
+          },
+        });
+
+        await tx.organization.update({
+          where: { id: createdOrganization.id },
+          data: { primaryAdminUserId: primaryAdmin.id },
+        });
+
+        const setupToken = await this.createPasswordSetupToken(tx, primaryAdmin.id);
+        setupEmails.push({
+          to: primaryAdmin.email,
+          name: primaryAdmin.name ?? primaryAdminName,
+          role: primaryAdmin.role,
+          organizationName: createdOrganization.name,
+          setupUrl: this.passwordSetupUrl(setupToken),
+        });
+      }
+
+      const loaded = await tx.organization.findUnique({
+        where: { id: createdOrganization.id },
+        include: this.organizationInclude,
+      });
+      if (!loaded) {
+        throw new AppError('Organization not found after create', 500);
+      }
+      return loaded;
     });
 
+    const setupEmail = setupEmails[0];
+    const setupEmailSent = setupEmail
+      ? await sendPasswordSetupEmail({
+          to: setupEmail.to,
+          name: setupEmail.name,
+          role: setupEmail.role,
+          organizationName: setupEmail.organizationName,
+          setupUrl: setupEmail.setupUrl,
+          expiresInLabel: `${PASSWORD_SETUP_EXPIRY_DAYS} days`,
+        })
+      : null;
+
     await this.logAudit(actor.userId, 'organization.create', 'organization', organization.id, `Created organization ${organization.name}`);
-    return organization;
+    if (setupEmail && !setupEmailSent) {
+      await this.logAudit(
+        actor.userId,
+        'organization.primary_admin.setup_email_failed',
+        'organization',
+        organization.id,
+        `Password setup email failed for ${setupEmail.to}`,
+      );
+    }
+    return { ...organization, setupEmailSent };
   }
 
   async updateOrganization(
@@ -682,16 +947,90 @@ export class AdminService {
 
     const existing = await prisma.organization.findUnique({
       where: { id: organizationId },
-      select: { id: true, name: true, settings: true },
+      select: {
+        id: true,
+        name: true,
+        kind: true,
+        deletedAt: true,
+        settings: true,
+        supportEmail: true,
+        primaryAdminUserId: true,
+        storageProvider: true,
+        storageProviders: true,
+      },
     });
-    if (!existing) {
+    if (!existing || existing.deletedAt) {
       throw new AppError('Organization not found', 404);
     }
+
+    const commercialKeys: Array<keyof UpdateOrganizationInput> = [
+      'brandingMode',
+      'brandName',
+      'brandPrimaryColor',
+      'brandAccentColor',
+      'studentLoginEnabled',
+      'parentLoginEnabled',
+      'sessionOnlyJoinEnabled',
+      'teacherOnlyMode',
+    ];
+    if (
+      actor.role !== UserRole.SUPER_ADMIN &&
+      commercialKeys.some((key) => input[key] !== undefined)
+    ) {
+      throw new AppError('Only SoftLogic Super Admin can change organization commercial controls', 403);
+    }
+
+    const nextSupportEmail =
+      input.supportEmail === undefined
+        ? undefined
+        : normalizeEmail(input.supportEmail);
+    const supportEmailChanged =
+      nextSupportEmail !== undefined &&
+      nextSupportEmail !== normalizeEmail(existing.supportEmail);
+    if (supportEmailChanged && nextSupportEmail) {
+      await this.ensureSupportEmailAvailable(nextSupportEmail, {
+        organizationId,
+        allowedUserId: existing.primaryAdminUserId ?? undefined,
+      });
+    }
+
+    const storage =
+      input.storageProviders !== undefined ||
+      input.defaultStorageProvider !== undefined ||
+      input.storageProvider !== undefined ||
+      input.storageStatus !== undefined
+        ? this.resolveStorageSelection({
+            storageProviders:
+              input.storageProviders ?? existing.storageProviders,
+            defaultStorageProvider:
+              input.defaultStorageProvider ??
+              input.storageProvider ??
+              existing.storageProvider,
+            storageProvider:
+              input.storageProvider ??
+              input.defaultStorageProvider ??
+              existing.storageProvider,
+            storageStatus: input.storageStatus,
+          })
+        : null;
 
     const data: Prisma.OrganizationUpdateInput = {
       name: input.name,
       slug: input.slug ? slugify(input.slug) : undefined,
       status: input.status,
+      brandingMode: input.brandingMode,
+      brandName: input.brandName,
+      brandPrimaryColor: input.brandPrimaryColor,
+      brandAccentColor: input.brandAccentColor,
+      studentLoginEnabled: input.studentLoginEnabled,
+      parentLoginEnabled: input.parentLoginEnabled,
+      sessionOnlyJoinEnabled: input.sessionOnlyJoinEnabled,
+      teacherOnlyMode: input.teacherOnlyMode,
+      supportEmail: nextSupportEmail,
+      supportPhone: input.supportPhone,
+      storageProviders: storage?.providers,
+      storageProvider: storage?.defaultProvider,
+      storageStatus: storage?.status,
     };
     if (input.settings !== undefined) {
       data.settings = mergeOrganizationSettings(
@@ -700,11 +1039,109 @@ export class AdminService {
       );
     }
 
-    const organization = await prisma.organization.update({
-      where: { id: organizationId },
-      data,
-      include: this.organizationInclude,
+    const setupEmails: PasswordSetupEmailPayload[] = [];
+
+    const organization = await prisma.$transaction(async (tx) => {
+      let primaryAdminUserId = existing.primaryAdminUserId;
+      if (supportEmailChanged && nextSupportEmail) {
+        const primaryAdminRole = primaryAdminRoleForOrganization(existing.kind);
+        const primaryAdminName = `${input.name ?? existing.name} Admin`;
+        if (primaryAdminUserId) {
+          const primaryAdmin = await tx.user.update({
+            where: { id: primaryAdminUserId },
+            data: {
+              email: nextSupportEmail,
+              name: primaryAdminName,
+              role: primaryAdminRole,
+              status: UserStatus.ACTIVE,
+              isEmailVerified: false,
+              passwordHash: null,
+              primaryOrganizationId: organizationId,
+            },
+          });
+          await tx.organizationMembership.upsert({
+            where: {
+              userId_organizationId: {
+                userId: primaryAdmin.id,
+                organizationId,
+              },
+            },
+            update: {},
+            create: {
+              userId: primaryAdmin.id,
+              organizationId,
+            },
+          });
+          const setupToken = await this.createPasswordSetupToken(tx, primaryAdmin.id);
+          setupEmails.push({
+            to: primaryAdmin.email,
+            name: primaryAdmin.name ?? primaryAdminName,
+            role: primaryAdmin.role,
+            organizationName: input.name ?? existing.name,
+            setupUrl: this.passwordSetupUrl(setupToken),
+          });
+        } else {
+          const primaryAdmin = await tx.user.create({
+            data: {
+              email: nextSupportEmail,
+              name: primaryAdminName,
+              role: primaryAdminRole,
+              status: UserStatus.ACTIVE,
+              timezone: 'UTC',
+              language: 'en',
+              invitedById: actor.userId,
+              primaryOrganizationId: organizationId,
+            },
+          });
+          primaryAdminUserId = primaryAdmin.id;
+          await tx.organizationMembership.create({
+            data: {
+              userId: primaryAdmin.id,
+              organizationId,
+            },
+          });
+          const setupToken = await this.createPasswordSetupToken(tx, primaryAdmin.id);
+          setupEmails.push({
+            to: primaryAdmin.email,
+            name: primaryAdmin.name ?? primaryAdminName,
+            role: primaryAdmin.role,
+            organizationName: input.name ?? existing.name,
+            setupUrl: this.passwordSetupUrl(setupToken),
+          });
+        }
+        data.primaryAdminUser = primaryAdminUserId
+          ? { connect: { id: primaryAdminUserId } }
+          : undefined;
+      }
+
+      const updated = await tx.organization.update({
+        where: { id: organizationId },
+        data,
+        include: this.organizationInclude,
+      });
+
+      if (storage) {
+        await this.syncOrganizationStorageConnections(tx, organizationId, storage);
+      }
+
+      const reloaded = await tx.organization.findUnique({
+        where: { id: organizationId },
+        include: this.organizationInclude,
+      });
+      return reloaded ?? updated;
     });
+
+    const setupEmail = setupEmails[0];
+    const setupEmailSent = setupEmail
+      ? await sendPasswordSetupEmail({
+          to: setupEmail.to,
+          name: setupEmail.name,
+          role: setupEmail.role,
+          organizationName: setupEmail.organizationName,
+          setupUrl: setupEmail.setupUrl,
+          expiresInLabel: `${PASSWORD_SETUP_EXPIRY_DAYS} days`,
+        })
+      : null;
 
     await this.logAudit(
       actor.userId,
@@ -713,7 +1150,218 @@ export class AdminService {
       organization.id,
       `Updated organization ${organization.name}`,
     );
-    return organization;
+    if (setupEmail && !setupEmailSent) {
+      await this.logAudit(
+        actor.userId,
+        'organization.primary_admin.setup_email_failed',
+        'organization',
+        organization.id,
+        `Password setup email failed for ${setupEmail.to}`,
+      );
+    }
+    return { ...organization, setupEmailSent };
+  }
+
+  async deleteOrganization(
+    actor: AuthenticatedUserLike,
+    organizationId: string,
+  ): Promise<DeleteOrganizationResult> {
+    if (actor.role !== UserRole.SUPER_ADMIN) {
+      throw new AppError('Only SoftLogic Super Admin can delete organizations', 403);
+    }
+
+    const organization = await prisma.organization.findUnique({
+      where: { id: organizationId },
+      include: {
+        memberships: { select: { userId: true } },
+      },
+    });
+    if (!organization || organization.deletedAt) {
+      throw new AppError('Organization not found', 404);
+    }
+    if (organization.kind === OrganizationKind.INTERNAL) {
+      throw new AppError('Internal SoftLogic organizations cannot be deleted', 400);
+    }
+
+    const activeChildCount = await prisma.organization.count({
+      where: {
+        parentOrganizationId: organizationId,
+        status: OrganizationStatus.ACTIVE,
+        deletedAt: null,
+      },
+    });
+    if (activeChildCount > 0) {
+      throw new AppError('Archive active child organizations before deleting this organization', 409);
+    }
+
+    const users = await prisma.user.findMany({
+      where: {
+        deletedAt: null,
+        OR: [
+          { primaryOrganizationId: organizationId },
+          { memberships: { some: { organizationId } } },
+        ],
+      },
+      select: {
+        id: true,
+        email: true,
+        archivedEmail: true,
+      },
+    });
+    const userIds = users.map((user) => user.id);
+    const deletedAt = new Date();
+    const archivedSlug = organization.archivedSlug ?? organization.slug;
+    const archivedSupportEmail =
+      organization.archivedSupportEmail ?? organization.supportEmail ?? null;
+    const replacementSlug = archivedSlugFor(organization.id, organization.slug);
+
+    let canceledSubscriptionCount = 0;
+    let canceledCheckoutSessionCount = 0;
+    let disabledHardwareKeyCount = 0;
+    let disabledHardwareActivationCount = 0;
+    let disabledAiCreditAccountCount = 0;
+    let disconnectedStorageConnectionCount = 0;
+
+    await prisma.$transaction(async (tx) => {
+      await tx.organization.update({
+        where: { id: organizationId },
+        data: {
+          slug: replacementSlug,
+          archivedSlug,
+          archivedSupportEmail,
+          supportEmail: null,
+          primaryAdminUserId: null,
+          status: OrganizationStatus.INACTIVE,
+          storageProviders: [],
+          storageProvider: null,
+          storageStatus: OrganizationStorageStatus.NOT_CONFIGURED,
+          deletedAt,
+        },
+      });
+
+      for (const user of users) {
+        await tx.user.update({
+          where: { id: user.id },
+          data: {
+            email: deletedEmailFor(user.id),
+            archivedEmail: user.archivedEmail ?? user.email,
+            googleId: null,
+            passwordHash: null,
+            status: UserStatus.DISABLED,
+            isEmailVerified: false,
+            deletedAt,
+          },
+        });
+      }
+
+      if (userIds.length > 0) {
+        await tx.session.deleteMany({ where: { userId: { in: userIds } } });
+        await tx.otp.deleteMany({ where: { userId: { in: userIds } } });
+        await tx.organizationMembership.deleteMany({
+          where: { userId: { in: userIds } },
+        });
+        await tx.parentStudentLink.deleteMany({
+          where: {
+            OR: [
+              { organizationId },
+              { parentUserId: { in: userIds } },
+              { studentUserId: { in: userIds } },
+            ],
+          },
+        });
+      } else {
+        await tx.organizationMembership.deleteMany({ where: { organizationId } });
+        await tx.parentStudentLink.deleteMany({ where: { organizationId } });
+      }
+
+      const canceledSubscriptions = await tx.subscription.updateMany({
+        where: {
+          organizationId,
+          status: { in: [SubscriptionStatus.ACTIVE, SubscriptionStatus.TRIAL] },
+        },
+        data: {
+          status: SubscriptionStatus.CANCELED,
+          endDate: deletedAt,
+          seatUsage: 0,
+        },
+      });
+      canceledSubscriptionCount = canceledSubscriptions.count;
+      await tx.subscription.updateMany({
+        where: {
+          organizationId,
+          status: { notIn: [SubscriptionStatus.ACTIVE, SubscriptionStatus.TRIAL] },
+        },
+        data: {
+          seatUsage: 0,
+        },
+      });
+
+      const canceledCheckoutSessions = await tx.checkoutSession.updateMany({
+        where: { organizationId, status: CheckoutSessionStatus.PENDING },
+        data: { status: CheckoutSessionStatus.CANCELED },
+      });
+      canceledCheckoutSessionCount = canceledCheckoutSessions.count;
+
+      const disabledHardwareKeys = await tx.hardwareActivationKey.updateMany({
+        where: {
+          organizationId,
+          status: { not: HardwareActivationKeyStatus.DISABLED },
+        },
+        data: { status: HardwareActivationKeyStatus.DISABLED },
+      });
+      disabledHardwareKeyCount = disabledHardwareKeys.count;
+
+      const disabledHardwareActivations = await tx.hardwareActivation.updateMany({
+        where: {
+          organizationId,
+          status: { not: HardwareActivationStatus.DISABLED },
+        },
+        data: { status: HardwareActivationStatus.DISABLED },
+      });
+      disabledHardwareActivationCount = disabledHardwareActivations.count;
+
+      const disabledAiCreditAccounts = await tx.aiCreditAccount.updateMany({
+        where: {
+          organizationId,
+          status: { not: AiCreditAccountStatus.DISABLED },
+        },
+        data: { status: AiCreditAccountStatus.DISABLED },
+      });
+      disabledAiCreditAccountCount = disabledAiCreditAccounts.count;
+
+      const disconnectedStorageConnections = await tx.organizationStorageConnection.updateMany({
+        where: { organizationId },
+        data: {
+          status: OrganizationStorageStatus.NOT_CONFIGURED,
+          encryptedTokens: null,
+          disconnectedAt: deletedAt,
+          lastError: 'Organization archived by SoftLogic Super Admin',
+        },
+      });
+      disconnectedStorageConnectionCount = disconnectedStorageConnections.count;
+    });
+
+    await this.logAudit(
+      actor.userId,
+      'organization.delete',
+      'organization',
+      organizationId,
+      `Archived organization ${organization.name}`,
+    );
+
+    return {
+      id: organizationId,
+      deletedAt,
+      archivedSlug,
+      archivedSupportEmail,
+      affectedUserCount: userIds.length,
+      canceledSubscriptionCount,
+      canceledCheckoutSessionCount,
+      disabledHardwareKeyCount,
+      disabledHardwareActivationCount,
+      disabledAiCreditAccountCount,
+      disconnectedStorageConnectionCount,
+    };
   }
 
   async uploadOrganizationLogo(
@@ -813,8 +1461,29 @@ export class AdminService {
     options: { exportAll?: boolean } = {},
   ) {
     const managedOrganizationIds = await getManagedOrganizationIds(actor);
+    const archivedOnly = csvHasValue(query.status, 'ARCHIVED');
+    if (
+      actor.role === UserRole.SUPER_ADMIN &&
+      !query.organizationId &&
+      query.scope !== 'ALL' &&
+      !archivedOnly
+    ) {
+      return paginationMeta(
+        [],
+        0,
+        query.page,
+        options.exportAll ? query.perPage : query.perPage,
+        {
+          ...nonEmptyFilters(query),
+          requiresOrganization: true,
+        },
+      );
+    }
     const and: Prisma.UserWhereInput[] = [
-      this.userScopeWhere(actor, managedOrganizationIds),
+      this.userScopeWhere(actor, managedOrganizationIds, {
+        includeArchived: archivedOnly,
+      }),
+      archivedOnly ? { deletedAt: { not: null } } : { deletedAt: null },
     ];
     const roles = csvEnumValues(query.role, [
       UserRole.SUPER_ADMIN,
@@ -823,6 +1492,7 @@ export class AdminService {
       UserRole.ADMIN,
       UserRole.TEACHER,
       UserRole.STUDENT,
+      UserRole.PARENT,
     ]);
     const statuses = csvEnumValues(query.status, [
       UserStatus.ACTIVE,
@@ -900,14 +1570,27 @@ export class AdminService {
   }
 
   async getUser(actor: AuthenticatedUserLike, userId: string) {
-    const result = await this.listUsers(
-      actor,
-      { page: 1, perPage: 1, sortOrder: 'desc', search: undefined } as ListUsersQuery,
-      { exportAll: true },
-    );
-    const user = result.items.find((item) => item.id === userId);
+    const managedOrganizationIds = await getManagedOrganizationIds(actor);
+    const scope = this.userScopeWhere(actor, managedOrganizationIds, {
+      includeArchived: true,
+    });
+    const user = await prisma.user.findFirst({
+      where: { AND: [{ id: userId }, scope] },
+      include: { primaryOrganization: true },
+    });
     if (!user) throw new AppError('User not found', 404);
-    return user;
+    const subscription = await prisma.subscription.findFirst({
+      where: {
+        OR: [
+          { userId: user.id },
+          ...(user.primaryOrganizationId
+            ? [{ organizationId: user.primaryOrganizationId }]
+            : []),
+        ],
+      },
+      orderBy: { updatedAt: 'desc' },
+    });
+    return { ...user, subscription };
   }
 
   async exportUsers(actor: AuthenticatedUserLike, query: ListUsersQuery & { format: AdminExportFormat }) {
@@ -922,7 +1605,12 @@ export class AdminService {
         { header: 'Name', key: 'name', width: 24, value: (row) => row.name ?? '' },
         { header: 'Email', key: 'email', width: 34, value: (row) => row.email },
         { header: 'Role', key: 'role', width: 20, value: (row) => ROLE_LABEL[row.role] },
-        { header: 'Status', key: 'status', width: 16, value: (row) => USER_STATUS_LABEL[row.status] },
+        {
+          header: 'Status',
+          key: 'status',
+          width: 16,
+          value: (row) => (row.deletedAt ? 'Archived' : USER_STATUS_LABEL[row.status]),
+        },
         { header: 'Organization', key: 'organization', width: 28, value: (row) => row.primaryOrganization?.name ?? '' },
         { header: 'Email Verified', key: 'verified', width: 16, value: (row) => row.isEmailVerified ? 'Yes' : 'No' },
         { header: 'Timezone', key: 'timezone', width: 18, value: (row) => row.timezone },
@@ -938,19 +1626,31 @@ export class AdminService {
       throw new AppError('You do not have permission to assign this role', 403);
     }
 
+    const email = normalizeEmail(input.email);
+    if (!email) {
+      throw new AppError('Email is required', 400);
+    }
     const organizationId = await this.resolveOrganizationForUser(actor, input.organizationId ?? null);
     const existing = await prisma.user.findFirst({
-      where: { email: input.email },
+      where: { email, deletedAt: null },
       select: { id: true },
     });
     if (existing) {
       throw new AppError('A user with this email already exists', 409);
     }
 
+    if ((input.status ?? UserStatus.ACTIVE) === UserStatus.ACTIVE) {
+      await licensingService.assertCanActivateUserRole({
+        organizationId,
+        role: input.role,
+      });
+    }
+
+    const setupEmails: PasswordSetupEmailPayload[] = [];
     const user = await prisma.$transaction(async (tx) => {
       const createdUser = await tx.user.create({
         data: {
-          email: input.email,
+          email,
           name: input.name,
           role: input.role,
           status: input.status ?? UserStatus.ACTIVE,
@@ -970,15 +1670,66 @@ export class AdminService {
         });
       }
 
+      if (input.role === UserRole.PARENT && input.linkedStudentIds?.length) {
+        await this.createParentStudentLinks(
+          tx,
+          createdUser.id,
+          organizationId,
+          input.linkedStudentIds,
+        );
+      }
+
+      if (isAdminOnboardingRole(input.role)) {
+        const setupToken = await this.createPasswordSetupToken(tx, createdUser.id);
+        const organization = organizationId
+          ? await tx.organization.findUnique({
+              where: { id: organizationId },
+              select: { name: true },
+            })
+          : null;
+        setupEmails.push({
+          to: createdUser.email,
+          name: createdUser.name,
+          role: createdUser.role,
+          organizationName: organization?.name,
+          setupUrl: this.passwordSetupUrl(setupToken),
+        });
+      }
+
       return createdUser;
     });
 
+    if (organizationId) {
+      await licensingService.recalculateLicenseUsage(organizationId);
+    }
+
     await this.logAudit(actor.userId, 'user.create', 'user', user.id, `Created user ${user.email}`);
-    await sendWelcomeEmail({
-      to: user.email,
-      name: user.name,
-      role: user.role,
-    });
+    const setupEmail = setupEmails[0];
+    if (setupEmail) {
+      const setupEmailSent = await sendPasswordSetupEmail({
+        to: setupEmail.to,
+        name: setupEmail.name,
+        role: setupEmail.role,
+        organizationName: setupEmail.organizationName,
+        setupUrl: setupEmail.setupUrl,
+        expiresInLabel: `${PASSWORD_SETUP_EXPIRY_DAYS} days`,
+      });
+      if (!setupEmailSent) {
+        await this.logAudit(
+          actor.userId,
+          'user.setup_email_failed',
+          'user',
+          user.id,
+          `Password setup email failed for ${setupEmail.to}`,
+        );
+      }
+    } else {
+      await sendWelcomeEmail({
+        to: user.email,
+        name: user.name,
+        role: user.role,
+      });
+    }
     return findUserContextById(user.id);
   }
 
@@ -1006,6 +1757,16 @@ export class AdminService {
     const organizationId = input.organizationId === undefined
       ? existing.primaryOrganizationId
       : await this.resolveOrganizationForUser(actor, input.organizationId);
+    const nextRole = input.role ?? existing.role;
+    const nextStatus = input.status ?? existing.status;
+
+    if (nextStatus === UserStatus.ACTIVE) {
+      await licensingService.assertCanActivateUserRole({
+        organizationId,
+        role: nextRole,
+        userIdToIgnore: userId,
+      });
+    }
 
     await prisma.$transaction(async (tx) => {
       await tx.user.update({
@@ -1032,10 +1793,326 @@ export class AdminService {
           },
         });
       }
+
+      if (nextRole === UserRole.PARENT && input.linkedStudentIds) {
+        await tx.parentStudentLink.deleteMany({ where: { parentUserId: userId } });
+        await this.createParentStudentLinks(
+          tx,
+          userId,
+          organizationId,
+          input.linkedStudentIds,
+        );
+      }
     });
+
+    const affectedOrganizationIds = new Set(
+      [existing.primaryOrganizationId, organizationId].filter(Boolean) as string[],
+    );
+    for (const affectedOrganizationId of affectedOrganizationIds) {
+      await licensingService.recalculateLicenseUsage(affectedOrganizationId);
+    }
 
     await this.logAudit(actor.userId, 'user.update', 'user', userId, `Updated user ${existing.email}`);
     return findUserContextById(userId);
+  }
+
+  async deleteUser(
+    actor: AuthenticatedUserLike,
+    userId: string,
+  ): Promise<DeleteUserResult> {
+    if (userId === actor.userId) {
+      throw new AppError('You cannot delete your own account', 400);
+    }
+
+    const existing = await prisma.user.findUnique({
+      where: { id: userId },
+      include: {
+        memberships: { select: { organizationId: true } },
+        primaryAdminOrganizations: { select: { id: true, supportEmail: true } },
+      },
+    });
+    if (!existing || existing.deletedAt) {
+      throw new AppError('User not found', 404);
+    }
+
+    if (!canManageRole(actor.role, existing.role) && actor.role !== UserRole.SUPER_ADMIN) {
+      throw new AppError('You do not have permission to delete this user', 403);
+    }
+
+    if (actor.role !== UserRole.SUPER_ADMIN) {
+      const targetOrganizationIds = [
+        existing.primaryOrganizationId,
+        ...existing.memberships.map((membership) => membership.organizationId),
+      ].filter(Boolean) as string[];
+      const managedOrganizationIds = await getManagedOrganizationIds(actor);
+      const canAccessTarget = targetOrganizationIds.some((organizationId) =>
+        managedOrganizationIds?.includes(organizationId),
+      );
+      if (!canAccessTarget) {
+        throw new AppError('You do not have permission to delete this user', 403);
+      }
+    }
+
+    if (existing.role === UserRole.SUPER_ADMIN) {
+      const remainingSuperAdmins = await prisma.user.count({
+        where: {
+          id: { not: userId },
+          role: UserRole.SUPER_ADMIN,
+          status: UserStatus.ACTIVE,
+          deletedAt: null,
+        },
+      });
+      if (remainingSuperAdmins === 0) {
+        throw new AppError('At least one active Super Admin must remain', 400);
+      }
+    }
+
+    const deletedAt = new Date();
+    const archivedEmail = existing.archivedEmail ?? existing.email;
+    const replacementEmail = deletedEmailFor(existing.id);
+    const affectedOrganizationIds = Array.from(
+      new Set(
+        [
+          existing.primaryOrganizationId,
+          ...existing.memberships.map((membership) => membership.organizationId),
+          ...existing.primaryAdminOrganizations.map((organization) => organization.id),
+        ].filter(Boolean) as string[],
+      ),
+    );
+
+    await prisma.$transaction(async (tx) => {
+      await tx.user.update({
+        where: { id: userId },
+        data: {
+          email: replacementEmail,
+          archivedEmail,
+          googleId: null,
+          passwordHash: null,
+          status: UserStatus.DISABLED,
+          isEmailVerified: false,
+          deletedAt,
+        },
+      });
+      await tx.session.deleteMany({ where: { userId } });
+      await tx.otp.deleteMany({ where: { userId } });
+      await tx.organizationMembership.deleteMany({ where: { userId } });
+      await tx.parentStudentLink.deleteMany({
+        where: { OR: [{ parentUserId: userId }, { studentUserId: userId }] },
+      });
+      await tx.organization.updateMany({
+        where: {
+          OR: [
+            { primaryAdminUserId: userId },
+            { supportEmail: { equals: archivedEmail, mode: 'insensitive' } },
+          ],
+        },
+        data: {
+          primaryAdminUserId: null,
+          archivedSupportEmail: archivedEmail,
+          supportEmail: null,
+        },
+      });
+    });
+
+    const licenseSnapshots: Record<string, unknown> = {};
+    for (const organizationId of affectedOrganizationIds) {
+      licenseSnapshots[organizationId] =
+        await licensingService.recalculateLicenseUsage(organizationId);
+    }
+
+    await this.logAudit(
+      actor.userId,
+      'user.delete',
+      'user',
+      userId,
+      `Deleted user ${archivedEmail}`,
+    );
+
+    return {
+      id: userId,
+      deletedAt,
+      archivedEmail,
+      affectedOrganizationIds,
+      licenseSnapshots,
+    };
+  }
+
+  // #op Load a target user and enforce the same managed-org scope used by
+  // updateUser/deleteUser: super admin can reach anyone; partner/customer/admin
+  // can only reach users whose primary org or memberships fall within their
+  // managed organizations.
+  private async ensureManagedUser(
+    actor: AuthenticatedUserLike,
+    userId: string,
+  ): Promise<
+    Prisma.UserGetPayload<{ include: { memberships: { select: { organizationId: true } } } }>
+  > {
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      include: { memberships: { select: { organizationId: true } } },
+    });
+    if (!user || user.deletedAt) {
+      throw new AppError('User not found', 404);
+    }
+
+    if (actor.role !== UserRole.SUPER_ADMIN) {
+      if (!canManageRole(actor.role, user.role) && user.id !== actor.userId) {
+        throw new AppError('You do not have permission to manage this user', 403);
+      }
+      const targetOrganizationIds = [
+        user.primaryOrganizationId,
+        ...user.memberships.map((membership) => membership.organizationId),
+      ].filter(Boolean) as string[];
+      const managedOrganizationIds = await getManagedOrganizationIds(actor);
+      const canAccessTarget = targetOrganizationIds.some((organizationId) =>
+        managedOrganizationIds?.includes(organizationId),
+      );
+      if (!canAccessTarget && user.id !== actor.userId) {
+        throw new AppError('You do not have permission to manage this user', 403);
+      }
+    }
+
+    return user;
+  }
+
+  async resendUserInvite(actor: AuthenticatedUserLike, userId: string) {
+    const user = await this.ensureManagedUser(actor, userId);
+
+    if (user.passwordHash !== null || user.isEmailVerified) {
+      throw new AppError('User has already completed setup', 400);
+    }
+
+    const setupToken = await prisma.$transaction((tx) =>
+      this.createPasswordSetupToken(tx, user.id),
+    );
+    const organization = user.primaryOrganizationId
+      ? await prisma.organization.findUnique({
+          where: { id: user.primaryOrganizationId },
+          select: { name: true },
+        })
+      : null;
+
+    await sendPasswordSetupEmail({
+      to: user.email,
+      name: user.name,
+      role: user.role,
+      organizationName: organization?.name,
+      setupUrl: this.passwordSetupUrl(setupToken),
+      expiresInLabel: `${PASSWORD_SETUP_EXPIRY_DAYS} days`,
+    });
+
+    await this.logAudit(
+      actor.userId,
+      'admin.user.resend_invite',
+      'user',
+      user.id,
+      `Resent setup invite to ${user.email}`,
+    );
+
+    return { sent: true, email: user.email };
+  }
+
+  async forceLogoutUser(actor: AuthenticatedUserLike, userId: string) {
+    const user = await this.ensureManagedUser(actor, userId);
+
+    await authRepository.deleteAllUserSessions(user.id);
+
+    try {
+      await sendSessionsRevokedEmail({ to: user.email, name: user.name });
+    } catch (error) {
+      console.error(`Sessions revoked email failed for ${user.email}:`, error);
+    }
+
+    await this.logAudit(
+      actor.userId,
+      'admin.user.force_logout',
+      'user',
+      user.id,
+      `Signed ${user.email} out of all devices`,
+    );
+
+    return { revoked: true };
+  }
+
+  async bulkInviteUsers(actor: AuthenticatedUserLike, input: BulkInviteInput) {
+    const results: Array<{
+      email: string;
+      status: 'created' | 'failed';
+      error?: string;
+    }> = [];
+    let created = 0;
+    let failed = 0;
+
+    for (const row of input.users) {
+      try {
+        await this.createUser(actor, {
+          email: row.email,
+          name: row.name ?? undefined,
+          role: row.role,
+          organizationId: row.organizationId ?? undefined,
+        });
+        created += 1;
+        results.push({ email: row.email, status: 'created' });
+      } catch (error) {
+        failed += 1;
+        const message =
+          error instanceof AppError
+            ? error.message
+            : error instanceof Error
+              ? error.message
+              : 'Failed to invite user';
+        results.push({ email: row.email, status: 'failed', error: message });
+      }
+    }
+
+    await this.logAudit(
+      actor.userId,
+      'admin.user.bulk_invite',
+      'user',
+      actor.userId,
+      `Bulk invite processed: ${created} created, ${failed} failed of ${input.users.length}`,
+    );
+
+    return { createdCount: created, failedCount: failed, results };
+  }
+
+  async impersonateUser(actor: AuthenticatedUserLike, userId: string) {
+    if (actor.role !== UserRole.SUPER_ADMIN) {
+      throw new AppError('Forbidden', 403);
+    }
+
+    const target = await prisma.user.findUnique({
+      where: { id: userId },
+    });
+    if (!target || target.deletedAt) {
+      throw new AppError('User not found', 404);
+    }
+
+    const accessToken = generateAccessToken({
+      userId: target.id,
+      email: target.email,
+      role: target.role,
+      organizationId: target.primaryOrganizationId,
+    });
+
+    await this.logAudit(
+      actor.userId,
+      'admin.user.impersonate',
+      'user',
+      target.id,
+      `Impersonated user ${target.email} (${target.id})`,
+    );
+
+    return {
+      accessToken,
+      user: {
+        id: target.id,
+        email: target.email,
+        name: target.name,
+        role: target.role,
+        primaryOrganizationId: target.primaryOrganizationId,
+      },
+    };
   }
 
   async listSubscriptions(
@@ -1050,6 +2127,7 @@ export class AdminService {
     const statuses = csvEnumValues(query.status, [
       SubscriptionStatus.ACTIVE,
       SubscriptionStatus.TRIAL,
+      SubscriptionStatus.PENDING_APPROVAL,
       SubscriptionStatus.EXPIRED,
       SubscriptionStatus.CANCELED,
     ]);
@@ -1177,6 +2255,15 @@ export class AdminService {
     actor: AuthenticatedUserLike,
     input: CreateSubscriptionInput,
   ) {
+    // Admins (partner/customer/admin) may now REQUEST a subscription, but it
+    // lands in PENDING_APPROVAL and grants no seats until a Super Admin
+    // approves it. Super Admins keep the existing instant-active behaviour and
+    // full control over commercial fields (status, branding). The previous
+    // `requireSuperAdmin` hard block is intentionally removed here.
+    const isSuper = actor.role === UserRole.SUPER_ADMIN;
+
+    // Resolve + authorize the owning organization (scoping unchanged).
+    let ownerOrganizationId: string | null = input.organizationId ?? null;
     if (input.organizationId) {
       await ensureOrganizationManaged(input.organizationId, actor);
     } else if (input.userId) {
@@ -1187,8 +2274,32 @@ export class AdminService {
       if (!targetUser) {
         throw new AppError('User not found', 404);
       }
+      ownerOrganizationId = targetUser.primaryOrganizationId ?? null;
       if (targetUser.primaryOrganizationId) {
         await ensureOrganizationManaged(targetUser.primaryOrganizationId, actor);
+      }
+    }
+
+    // Status + branding are commercial controls. Super Admin sets them freely;
+    // for admins we force a pending request, inherit the org's branding, and
+    // ignore client-sent seat usage (real usage is derived, never asserted).
+    let status: SubscriptionStatus;
+    let brandingMode: BrandingMode;
+    let seatUsage: number;
+    if (isSuper) {
+      status = input.status ?? SubscriptionStatus.ACTIVE;
+      brandingMode = input.brandingMode ?? BrandingMode.SOFTLOGIC;
+      seatUsage = input.seatUsage;
+    } else {
+      status = SubscriptionStatus.PENDING_APPROVAL;
+      brandingMode = BrandingMode.SOFTLOGIC;
+      seatUsage = 0;
+      if (ownerOrganizationId) {
+        const org = await prisma.organization.findUnique({
+          where: { id: ownerOrganizationId },
+          select: { brandingMode: true },
+        });
+        brandingMode = org?.brandingMode ?? BrandingMode.SOFTLOGIC;
       }
     }
 
@@ -1196,10 +2307,12 @@ export class AdminService {
       data: {
         organizationId: input.organizationId ?? null,
         userId: input.userId ?? null,
+        createdById: actor.userId,
         planName: input.planName,
-        status: input.status ?? SubscriptionStatus.ACTIVE,
+        status,
+        brandingMode,
         seatLimit: input.seatLimit,
-        seatUsage: input.seatUsage,
+        seatUsage,
         startDate: input.startDate,
         endDate: input.endDate ?? null,
       },
@@ -1216,8 +2329,178 @@ export class AdminService {
       },
     });
 
-    await this.logAudit(actor.userId, 'subscription.create', 'subscription', subscription.id, `Created subscription ${subscription.planName}`);
+    if (subscription.organizationId) {
+      // No-op for pending subs (getActiveOrganizationSubscription filters to
+      // ACTIVE/TRIAL), correct recompute for the super-admin instant path.
+      await licensingService.recalculateLicenseUsage(subscription.organizationId);
+    }
+    await this.logAudit(
+      actor.userId,
+      isSuper ? 'subscription.create' : 'subscription.request',
+      'subscription',
+      subscription.id,
+      isSuper
+        ? `Created subscription ${subscription.planName}`
+        : `Requested subscription ${subscription.planName} (pending approval)`,
+    );
+
+    // Admin requests acknowledge the creator and notify super admins. Email is
+    // fire-and-forget so SMTP problems never roll back the created record.
+    if (!isSuper) {
+      await this.notifySubscriptionPending(actor, subscription);
+    }
+
     return subscription;
+  }
+
+  async approveSubscription(
+    actor: AuthenticatedUserLike,
+    subscriptionId: string,
+  ) {
+    await licensingService.requireSuperAdmin(actor);
+    const existing = await prisma.subscription.findUnique({
+      where: { id: subscriptionId },
+    });
+    if (!existing) {
+      throw new AppError('Subscription not found', 404);
+    }
+    // Only a pending request can be approved — protects a live ACTIVE
+    // (paying) subscription from being mutated through this path.
+    if (existing.status !== SubscriptionStatus.PENDING_APPROVAL) {
+      throw new AppError('Only a pending subscription can be approved', 409);
+    }
+
+    const subscription = await prisma.subscription.update({
+      where: { id: subscriptionId },
+      data: { status: SubscriptionStatus.ACTIVE },
+      include: {
+        organization: true,
+        user: { select: { id: true, email: true, name: true, role: true } },
+      },
+    });
+
+    if (subscription.organizationId) {
+      await licensingService.recalculateLicenseUsage(subscription.organizationId);
+    }
+    await this.logAudit(
+      actor.userId,
+      'subscription.approve',
+      'subscription',
+      subscription.id,
+      `Approved subscription ${subscription.planName}`,
+    );
+    await this.notifySubscriptionDecision(subscription, 'APPROVED');
+    return subscription;
+  }
+
+  async rejectSubscription(
+    actor: AuthenticatedUserLike,
+    subscriptionId: string,
+    reason?: string | null,
+  ) {
+    await licensingService.requireSuperAdmin(actor);
+    const existing = await prisma.subscription.findUnique({
+      where: { id: subscriptionId },
+    });
+    if (!existing) {
+      throw new AppError('Subscription not found', 404);
+    }
+    if (existing.status !== SubscriptionStatus.PENDING_APPROVAL) {
+      throw new AppError('Only a pending subscription can be rejected', 409);
+    }
+
+    const subscription = await prisma.subscription.update({
+      where: { id: subscriptionId },
+      data: { status: SubscriptionStatus.CANCELED },
+      include: {
+        organization: true,
+        user: { select: { id: true, email: true, name: true, role: true } },
+      },
+    });
+
+    await this.logAudit(
+      actor.userId,
+      'subscription.reject',
+      'subscription',
+      subscription.id,
+      reason
+        ? `Rejected subscription ${subscription.planName}: ${reason}`
+        : `Rejected subscription ${subscription.planName}`,
+    );
+    await this.notifySubscriptionDecision(subscription, 'REJECTED', reason);
+    return subscription;
+  }
+
+  private async notifySubscriptionPending(
+    actor: AuthenticatedUserLike,
+    subscription: Prisma.SubscriptionGetPayload<{ include: { organization: true } }>,
+  ) {
+    const organizationName = subscription.organization?.name ?? null;
+    const creator = await prisma.user.findUnique({
+      where: { id: actor.userId },
+      select: { email: true, name: true },
+    });
+    if (creator?.email) {
+      await sendSubscriptionPendingEmail({
+        to: creator.email,
+        name: creator.name,
+        planName: subscription.planName,
+        organizationName,
+        seatLimit: subscription.seatLimit,
+      }).catch(() => undefined);
+    }
+    const superAdmins = await prisma.user.findMany({
+      where: {
+        role: UserRole.SUPER_ADMIN,
+        status: UserStatus.ACTIVE,
+        deletedAt: null,
+      },
+      select: { email: true, name: true },
+    });
+    await Promise.all(
+      superAdmins.map((admin) =>
+        sendSubscriptionPendingEmail({
+          to: admin.email,
+          name: admin.name,
+          planName: subscription.planName,
+          organizationName,
+          seatLimit: subscription.seatLimit,
+          forSuperAdmin: true,
+          requestedByName: creator?.name ?? null,
+        }).catch(() => undefined),
+      ),
+    );
+  }
+
+  private async notifySubscriptionDecision(
+    subscription: Prisma.SubscriptionGetPayload<{ include: { organization: true } }>,
+    decision: 'APPROVED' | 'REJECTED',
+    reason?: string | null,
+  ) {
+    if (!subscription.createdById) return;
+    const creator = await prisma.user.findUnique({
+      where: { id: subscription.createdById },
+      select: { email: true, name: true },
+    });
+    if (!creator?.email) return;
+    const organizationName = subscription.organization?.name ?? null;
+    if (decision === 'APPROVED') {
+      await sendSubscriptionApprovedEmail({
+        to: creator.email,
+        name: creator.name,
+        planName: subscription.planName,
+        organizationName,
+        seatLimit: subscription.seatLimit,
+      }).catch(() => undefined);
+    } else {
+      await sendSubscriptionRejectedEmail({
+        to: creator.email,
+        name: creator.name,
+        planName: subscription.planName,
+        organizationName,
+        reason: reason ?? null,
+      }).catch(() => undefined);
+    }
   }
 
   async updateSubscription(
@@ -1225,6 +2508,7 @@ export class AdminService {
     subscriptionId: string,
     input: UpdateSubscriptionInput,
   ) {
+    await licensingService.requireSuperAdmin(actor);
     const existing = await prisma.subscription.findUnique({
       where: { id: subscriptionId },
     });
@@ -1246,7 +2530,9 @@ export class AdminService {
 
     const subscription = await prisma.subscription.update({
       where: { id: subscriptionId },
-      data: input,
+      data: {
+        ...input,
+      },
       include: {
         organization: true,
         user: {
@@ -1260,8 +2546,205 @@ export class AdminService {
       },
     });
 
+    if (subscription.organizationId) {
+      await licensingService.recalculateLicenseUsage(subscription.organizationId);
+    }
     await this.logAudit(actor.userId, 'subscription.update', 'subscription', subscription.id, `Updated subscription ${subscription.planName}`);
     return subscription;
+  }
+
+  async listPaymentProviders(actor: AuthenticatedUserLike) {
+    return licensingService.listPaymentProviders(actor);
+  }
+
+  async updatePaymentProvider(
+    actor: AuthenticatedUserLike,
+    input: UpdatePaymentProviderInput,
+  ) {
+    return licensingService.updatePaymentProvider(actor, input);
+  }
+
+  async recordOfflinePayment(
+    actor: AuthenticatedUserLike,
+    input: {
+      organizationId?: string | null;
+      subscriptionId?: string | null;
+      amountMinor: number;
+      currency?: string;
+      referenceNote?: string | null;
+      metadata?: Record<string, unknown>;
+    },
+  ) {
+    return licensingService.recordOfflinePayment(actor, input);
+  }
+
+  async createHardwareActivationKey(
+    actor: AuthenticatedUserLike,
+    input: {
+      organizationId: string;
+      subscriptionId?: string | null;
+      assignedUserId?: string | null;
+      label?: string | null;
+      expiresAt?: Date | null;
+      maxDevices?: number | null;
+    },
+  ) {
+    return licensingService.createHardwareActivationKey(actor, input);
+  }
+
+  async bulkCreateHardwareActivationKeys(
+    actor: AuthenticatedUserLike,
+    input: Parameters<typeof licensingService.bulkCreateHardwareActivationKeys>[1],
+  ) {
+    return licensingService.bulkCreateHardwareActivationKeys(actor, input);
+  }
+
+  async exportHardwareActivationKeys(
+    actor: AuthenticatedUserLike,
+    input: Parameters<typeof licensingService.exportHardwareActivationKeys>[1],
+  ) {
+    return licensingService.exportHardwareActivationKeys(actor, input);
+  }
+
+  async listSubscriptionPayments(
+    actor: AuthenticatedUserLike,
+    subscriptionId: string,
+  ) {
+    return licensingService.listSubscriptionPayments(actor, subscriptionId);
+  }
+
+  async renewSubscription(
+    actor: AuthenticatedUserLike,
+    subscriptionId: string,
+    input: {
+      newEndDate: Date;
+      extendKeys?: boolean;
+      payment?: {
+        amountMinor: number;
+        currency?: string | null;
+        referenceNote?: string | null;
+      } | null;
+    },
+  ) {
+    return licensingService.renewSubscription(actor, subscriptionId, input);
+  }
+
+  async resetHardwareActivation(
+    actor: AuthenticatedUserLike,
+    activationId: string,
+  ) {
+    return licensingService.resetHardwareActivation(actor, activationId);
+  }
+
+  async getSubscriptionDetails(
+    actor: AuthenticatedUserLike,
+    subscriptionId: string,
+  ) {
+    return licensingService.getSubscriptionDetails(actor, subscriptionId);
+  }
+
+  async getOrganizationLicenseDetails(
+    actor: AuthenticatedUserLike,
+    organizationId: string,
+  ) {
+    return licensingService.getOrganizationLicenseDetails(actor, organizationId);
+  }
+
+  async emailActivationKeysToOrgAdmin(
+    actor: AuthenticatedUserLike,
+    organizationId: string,
+  ) {
+    return licensingService.emailActivationKeysToOrgAdmin(actor, organizationId);
+  }
+
+  async extendAiCredits(
+    actor: AuthenticatedUserLike,
+    input: Parameters<typeof licensingService.extendAiCredits>[1],
+  ) {
+    return licensingService.extendAiCredits(actor, input);
+  }
+
+  async recalculateOrganizationLicenseUsage(
+    actor: AuthenticatedUserLike,
+    organizationId: string,
+  ) {
+    await licensingService.requireSuperAdmin(actor);
+    await ensureOrganizationManaged(organizationId, actor);
+    const snapshot = await licensingService.recalculateLicenseUsage(organizationId);
+    await this.logAudit(actor.userId, 'license.recalculate', 'organization', organizationId, 'Recalculated role-specific license usage');
+    return snapshot;
+  }
+
+  async upsertOrganizationStorageConnection(
+    actor: AuthenticatedUserLike,
+    organizationId: string,
+    input: {
+      provider: OrganizationStorageProvider;
+      status: OrganizationStorageStatus;
+      externalAccountEmail?: string | null;
+      rootFolderId?: string | null;
+      encryptedTokens?: string | null;
+      lastError?: string | null;
+    },
+  ) {
+    await ensureOrganizationManaged(organizationId, actor);
+    if (actor.role !== UserRole.SUPER_ADMIN && actor.role !== UserRole.PARTNER_ADMIN) {
+      throw new AppError('Only Super Admin or assigned Partner Admin can configure organization storage', 403);
+    }
+    const connection = await prisma.organizationStorageConnection.upsert({
+      where: {
+        organizationId_provider: {
+          organizationId,
+          provider: input.provider,
+        },
+      },
+      update: {
+        status: input.status,
+        externalAccountEmail: input.externalAccountEmail,
+        rootFolderId: input.rootFolderId,
+        encryptedTokens: input.encryptedTokens,
+        lastError: input.lastError,
+        connectedById: actor.userId,
+        validatedAt: input.status === OrganizationStorageStatus.CONNECTED ? new Date() : undefined,
+        disconnectedAt: input.status === OrganizationStorageStatus.NOT_CONFIGURED ? new Date() : null,
+      },
+      create: {
+        organizationId,
+        provider: input.provider,
+        status: input.status,
+        externalAccountEmail: input.externalAccountEmail,
+        rootFolderId: input.rootFolderId,
+        encryptedTokens: input.encryptedTokens,
+        lastError: input.lastError,
+        connectedById: actor.userId,
+        validatedAt: input.status === OrganizationStorageStatus.CONNECTED ? new Date() : undefined,
+      },
+    });
+    const organization = await prisma.organization.findUnique({
+      where: { id: organizationId },
+      select: {
+        storageProviders: true,
+        storageProvider: true,
+      },
+    });
+    const storageProviders = Array.from(
+      new Set([...(organization?.storageProviders ?? []), input.provider]),
+    );
+    const defaultProvider = organization?.storageProvider ?? input.provider;
+
+    await prisma.organization.update({
+      where: { id: organizationId },
+      data: {
+        storageProviders: {
+          set: storageProviders,
+        },
+        storageProvider: defaultProvider,
+        storageStatus:
+          defaultProvider === input.provider ? input.status : undefined,
+      },
+    });
+    await this.logAudit(actor.userId, 'organization.storage.upsert', 'organization', organizationId, `Updated ${input.provider} storage connection`);
+    return connection;
   }
 
   async listActivity(
@@ -1269,11 +2752,10 @@ export class AdminService {
     query: ListActivityQuery,
     options: { exportAll?: boolean } = {},
   ) {
-    if (actor.role !== 'SUPER_ADMIN') {
-      throw new AppError('Only super admin can view audit activity', 403);
-    }
-
-    const and: Prisma.AdminAuditLogWhereInput[] = [];
+    const managedOrganizationIds = await getManagedOrganizationIds(actor);
+    const and: Prisma.AdminAuditLogWhereInput[] = [
+      this.activityScopeWhere(actor, managedOrganizationIds),
+    ];
     if (query.search) {
       and.push({
         OR: [
@@ -1292,7 +2774,7 @@ export class AdminService {
     if (query.targetId) and.push({ targetId: { contains: query.targetId, mode: 'insensitive' } });
     const createdAt = dateRange(query.createdFrom, query.createdTo);
     if (createdAt) and.push({ createdAt });
-    const where: Prisma.AdminAuditLogWhereInput = and.length ? { AND: and } : {};
+    const where: Prisma.AdminAuditLogWhereInput = { AND: and };
     const orderBy = this.orderBy<Prisma.AdminAuditLogOrderByWithRelationInput>(
       query.sortBy,
       query.sortOrder,
@@ -1676,6 +3158,149 @@ export class AdminService {
     });
   }
 
+  private resolveStorageSelection(input: {
+    storageProviders?: OrganizationStorageProvider[];
+    defaultStorageProvider?: OrganizationStorageProvider | null;
+    storageProvider?: OrganizationStorageProvider | null;
+    storageStatus?: OrganizationStorageStatus;
+  }): {
+    providers: OrganizationStorageProvider[];
+    defaultProvider: OrganizationStorageProvider | null;
+    status: OrganizationStorageStatus;
+  } {
+    const providers = Array.from(
+      new Set(
+        [
+          ...(input.storageProviders ?? []),
+          input.defaultStorageProvider ?? null,
+          input.storageProvider ?? null,
+        ].filter(Boolean) as OrganizationStorageProvider[],
+      ),
+    );
+    const defaultProvider =
+      input.defaultStorageProvider ??
+      input.storageProvider ??
+      providers[0] ??
+      null;
+    if (defaultProvider && !providers.includes(defaultProvider)) {
+      providers.push(defaultProvider);
+    }
+
+    return {
+      providers,
+      defaultProvider,
+      status:
+        defaultProvider == null
+          ? OrganizationStorageStatus.NOT_CONFIGURED
+          : input.storageStatus ?? OrganizationStorageStatus.NOT_CONFIGURED,
+    };
+  }
+
+  private async syncOrganizationStorageConnections(
+    tx: Prisma.TransactionClient,
+    organizationId: string,
+    storage: {
+      providers: OrganizationStorageProvider[];
+      defaultProvider: OrganizationStorageProvider | null;
+      status: OrganizationStorageStatus;
+    },
+  ): Promise<void> {
+    if (storage.providers.length === 0) {
+      await tx.organizationStorageConnection.deleteMany({
+        where: { organizationId },
+      });
+      return;
+    }
+
+    await tx.organizationStorageConnection.deleteMany({
+      where: {
+        organizationId,
+        provider: { notIn: storage.providers },
+      },
+    });
+    for (const provider of storage.providers) {
+      await tx.organizationStorageConnection.upsert({
+        where: {
+          organizationId_provider: {
+            organizationId,
+            provider,
+          },
+        },
+        update: {},
+        create: {
+          organizationId,
+          provider,
+          status:
+            provider === storage.defaultProvider
+              ? storage.status
+              : OrganizationStorageStatus.NOT_CONFIGURED,
+        },
+      });
+    }
+  }
+
+  private async ensureSupportEmailAvailable(
+    supportEmail: string,
+    options: {
+      organizationId?: string;
+      allowedUserId?: string;
+    } = {},
+  ): Promise<void> {
+    const user = await prisma.user.findFirst({
+      where: {
+        email: supportEmail,
+        deletedAt: null,
+        ...(options.allowedUserId ? { id: { not: options.allowedUserId } } : {}),
+      },
+      select: { id: true },
+    });
+    if (user) {
+      throw new AppError('Support email already exists as a user account', 409);
+    }
+
+    const organization = await prisma.organization.findFirst({
+      where: {
+        supportEmail: { equals: supportEmail, mode: 'insensitive' },
+        deletedAt: null,
+        ...(options.organizationId ? { id: { not: options.organizationId } } : {}),
+      },
+      select: { id: true },
+    });
+    if (organization) {
+      throw new AppError('Support email already exists on another organization', 409);
+    }
+  }
+
+  private async createPasswordSetupToken(
+    tx: Prisma.TransactionClient,
+    userId: string,
+  ): Promise<string> {
+    await tx.otp.updateMany({
+      where: {
+        userId,
+        type: OtpType.PASSWORD_RESET,
+        usedAt: null,
+      },
+      data: { usedAt: new Date() },
+    });
+
+    const secret = randomBytes(32).toString('hex');
+    const otp = await tx.otp.create({
+      data: {
+        userId,
+        type: OtpType.PASSWORD_RESET,
+        code: await bcrypt.hash(secret, 10),
+        expiresAt: new Date(Date.now() + PASSWORD_SETUP_EXPIRY_DAYS * DAY_MS),
+      },
+    });
+    return `${otp.id}.${secret}`;
+  }
+
+  private passwordSetupUrl(token: string): string {
+    const baseUrl = (env.PUBLIC_ADMIN_URL || env.PUBLIC_APP_URL).replace(/\/+$/, '');
+    return `${baseUrl}/setup-password?token=${encodeURIComponent(token)}`;
+  }
+
   private orderBy<T extends Record<string, unknown>>(
     requested: string | undefined,
     direction: 'asc' | 'desc',
@@ -1703,16 +3328,52 @@ export class AdminService {
     return requestedOrganizationId;
   }
 
+  private async createParentStudentLinks(
+    tx: Prisma.TransactionClient,
+    parentUserId: string,
+    organizationId: string | null,
+    studentIds: string[],
+  ): Promise<void> {
+    if (!organizationId) {
+      throw new AppError('Parent users must belong to an organization before linking students', 400);
+    }
+    const uniqueStudentIds = Array.from(new Set(studentIds.filter(Boolean)));
+    if (uniqueStudentIds.length === 0) return;
+
+    const students = await tx.user.findMany({
+      where: {
+        id: { in: uniqueStudentIds },
+        role: UserRole.STUDENT,
+        primaryOrganizationId: organizationId,
+        deletedAt: null,
+      },
+      select: { id: true },
+    });
+    if (students.length !== uniqueStudentIds.length) {
+      throw new AppError('Parents can only be linked to students in the same organization', 400);
+    }
+
+    await tx.parentStudentLink.createMany({
+      data: uniqueStudentIds.map((studentUserId) => ({
+        parentUserId,
+        studentUserId,
+        organizationId,
+      })),
+      skipDuplicates: true,
+    });
+  }
+
   private userScopeWhere(
     actor: AuthenticatedUserLike,
     managedOrganizationIds: string[] | null,
+    options: { includeArchived?: boolean } = {},
   ): Prisma.UserWhereInput {
     if (managedOrganizationIds === null) {
-      return { deletedAt: null };
+      return options.includeArchived ? {} : { deletedAt: null };
     }
 
     return {
-      deletedAt: null,
+      ...(options.includeArchived ? {} : { deletedAt: null }),
       OR: [
         { id: actor.userId },
         ...(managedOrganizationIds.length > 0
@@ -1724,8 +3385,15 @@ export class AdminService {
 
   private organizationScopeWhere(
     managedOrganizationIds: string[] | null,
+    options: { includeArchived?: boolean } = {},
   ): Prisma.OrganizationWhereInput {
-    return managedOrganizationIds === null ? {} : { id: { in: managedOrganizationIds } };
+    if (managedOrganizationIds === null) {
+      return options.includeArchived ? {} : { deletedAt: null };
+    }
+    return {
+      id: { in: managedOrganizationIds },
+      ...(options.includeArchived ? {} : { deletedAt: null }),
+    };
   }
 
   private subscriptionScopeWhere(

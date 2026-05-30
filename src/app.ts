@@ -18,6 +18,7 @@ import { exportRoutes } from './modules/export/export.routes';
 import { settingsRoutes } from './modules/settings/settings.routes';
 import { filterRoutes } from './modules/filter/filter.routes';
 import { adminRoutes } from './modules/admin/admin.routes';
+import { licensingRoutes } from './modules/licensing/licensing.routes';
 import { classroomRoutes } from './modules/classroom/classroom.routes';
 import { liveSessionRoutes } from './modules/live-sessions/live-session.routes';
 import { integrationsRoutes } from './modules/integrations/integrations.routes';
@@ -25,6 +26,8 @@ import { integrationsController } from './modules/integrations/integrations.cont
 import { mediaRoutes } from './modules/media/media.routes';
 import { i18nRoutes } from './modules/i18n/i18n.routes';
 import { feedbackRoutes } from './modules/feedback/feedback.routes';
+import { organizationsRoutes } from './modules/organizations/organizations.routes';
+import { supportRoutes } from './modules/support/support.routes';
 import {
   chatRoutes,
   assessmentsRoutes,
@@ -112,6 +115,9 @@ export const createApp = (): express.Application => {
   app.use(`${apiPrefix}/users/me/settings`, settingsRoutes);
   app.use(`${apiPrefix}/filter`, filterRoutes);
   app.use(`${apiPrefix}/admin`, adminRoutes);
+  app.use(`${apiPrefix}/license`, licensingRoutes);
+  app.use(`${apiPrefix}/organizations`, organizationsRoutes);
+  app.use(`${apiPrefix}/support`, supportRoutes);
   app.use(`${apiPrefix}/i18n`, i18nRoutes);
   app.use(`${apiPrefix}/feedback`, feedbackRoutes);
   app.use(`${apiPrefix}/classroom`, classroomRoutes);

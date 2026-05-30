@@ -57,7 +57,7 @@ describe('AdminService welcome email', () => {
       email: 'student@example.com',
       name: 'Student Demo',
       role: UserRole.STUDENT,
-      status: UserStatus.ACTIVE,
+      status: UserStatus.DISABLED,
     } as never);
   });
 
@@ -68,6 +68,7 @@ describe('AdminService welcome email', () => {
       email: 'student@example.com',
       name: 'Student Demo',
       role: UserRole.STUDENT,
+      status: UserStatus.DISABLED,
     } as never);
 
     await adminService.createUser(
@@ -76,6 +77,7 @@ describe('AdminService welcome email', () => {
         email: 'student@example.com',
         name: 'Student Demo',
         role: UserRole.STUDENT,
+        status: UserStatus.DISABLED,
       },
     );
 

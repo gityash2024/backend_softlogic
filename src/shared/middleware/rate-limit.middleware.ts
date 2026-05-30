@@ -46,3 +46,19 @@ export const otpRateLimiter = shouldRelaxAuthLimits
         message: 'Too many OTP requests. Please try again later.',
       },
     });
+
+export const passwordResetEmailLimiter = shouldRelaxAuthLimits
+  ? passthroughRateLimiter
+  : rateLimit({
+      windowMs: 60 * 60 * 1000, // 1 hour
+      max: 3, // 3 reset emails per hour per email address
+      standardHeaders: true,
+      legacyHeaders: false,
+      keyGenerator: (req) =>
+        req.body?.email ? String(req.body.email).toLowerCase() : (req.ip ?? ''),
+      message: {
+        success: false,
+        data: null,
+        message: 'Too many password reset requests. Please try again later.',
+      },
+    });

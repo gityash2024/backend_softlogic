@@ -3,6 +3,8 @@ import { prisma } from '@/config';
 import {
   AuthenticatedUserLike,
   getAccessibleOrganizationIds,
+  getManagedOrganizationIds,
+  isAdminRole,
   isSuperAdmin,
 } from '@/shared/utils/access-control';
 import { liveSessionService } from '@/modules/live-sessions/live-session.service';
@@ -27,7 +29,7 @@ const dateLabel = (value: Date): string => value.toISOString();
 
 export class ClassroomService {
   async getMe(user: ClassroomUser) {
-    const [profile, sessions, canvases] = await Promise.all([
+    const [profile, sessions, canvases, teachers] = await Promise.all([
       prisma.user.findUnique({
         where: { id: user.userId },
         select: {
@@ -42,6 +44,7 @@ export class ClassroomService {
       }),
       liveSessionService.listSessions(user),
       this.listCanvases(user),
+      this.listTeachers(user),
     ]);
 
     const sessionIds = sessions.map((session) => session.id);
@@ -103,6 +106,7 @@ export class ClassroomService {
         updatedAt: canvas.updatedAt,
         slideCount: canvas._count.slides,
       })),
+      teachers,
       materials: this.materialsFrom(canvases, mediaAssets, recordings),
       schedule: sessions
         .filter(
@@ -128,9 +132,18 @@ export class ClassroomService {
   }
 
   private async listCanvases(user: ClassroomUser) {
-    const organizationIds = await getAccessibleOrganizationIds(user);
+    const organizationIds = isAdminRole(user.role)
+      ? await getManagedOrganizationIds(user)
+      : await getAccessibleOrganizationIds(user);
     const where: Prisma.CanvasWhereInput = isSuperAdmin(user.role)
       ? { deletedAt: null }
+      : isAdminRole(user.role)
+        ? {
+            deletedAt: null,
+            ...(organizationIds && organizationIds.length > 0
+              ? { organizationId: { in: organizationIds } }
+              : { id: '__none__' }),
+          }
       : {
           deletedAt: null,
           OR: [
@@ -158,6 +171,38 @@ export class ClassroomService {
       orderBy: { updatedAt: 'desc' },
       include: { _count: { select: { slides: true } } },
       take: 100,
+    });
+  }
+
+  private async listTeachers(user: ClassroomUser) {
+    if (!isAdminRole(user.role)) {
+      return [];
+    }
+    const organizationIds = await getManagedOrganizationIds(user);
+    return prisma.user.findMany({
+      where: {
+        deletedAt: null,
+        role: UserRole.TEACHER,
+        ...(organizationIds && organizationIds.length > 0
+          ? { primaryOrganizationId: { in: organizationIds } }
+          : {}),
+      },
+      select: {
+        id: true,
+        email: true,
+        name: true,
+        status: true,
+        primaryOrganizationId: true,
+        primaryOrganization: {
+          select: {
+            id: true,
+            name: true,
+          },
+        },
+        lastLoginAt: true,
+      },
+      orderBy: [{ primaryOrganization: { name: 'asc' } }, { name: 'asc' }],
+      take: 200,
     });
   }
 

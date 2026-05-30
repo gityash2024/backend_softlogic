@@ -11,7 +11,8 @@ export class CanvasController {
       const { page, perPage } = paginationSchema.parse(req.query);
       const { skip, take } = getSkipTake(page, perPage);
       const accessibleOrganizationIds = await getAccessibleOrganizationIds(req.user!);
-      const where = accessibleOrganizationIds === null
+      const organizationId = typeof req.query.organizationId === 'string' ? req.query.organizationId : '';
+      const scopedWhere = accessibleOrganizationIds === null
         ? { deletedAt: null }
         : {
             deletedAt: null,
@@ -22,9 +23,15 @@ export class CanvasController {
                 : []),
             ],
           };
+      const where =
+        organizationId &&
+        (accessibleOrganizationIds === null ||
+          accessibleOrganizationIds.includes(organizationId))
+          ? { deletedAt: null, organizationId }
+          : scopedWhere;
 
       const [canvases, total] = await Promise.all([
-        prisma.canvas.findMany({ where, skip, take, orderBy: { updatedAt: 'desc' }, include: { _count: { select: { slides: true } } } }),
+        prisma.canvas.findMany({ where, skip, take, orderBy: { updatedAt: 'desc' }, include: { _count: { select: { slides: true } }, organization: { select: { id: true, name: true } } } }),
         prisma.canvas.count({ where }),
       ]);
 

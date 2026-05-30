@@ -1,5 +1,7 @@
 import { NextFunction, Request, Response } from 'express';
+import { env } from '@/config';
 import { ApiResponse } from '@/shared/utils/api-response';
+import { licensingService } from '@/modules/licensing/licensing.service';
 import { adminService } from './admin.service';
 import type { AdminExportFile } from './admin-export.util';
 
@@ -86,6 +88,15 @@ export class AdminController {
     }
   }
 
+  async deleteOrganization(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const result = await adminService.deleteOrganization(req.user!, req.params.id);
+      ApiResponse.success(res, result, 'Organization archived');
+    } catch (error) {
+      next(error);
+    }
+  }
+
   async uploadOrganizationLogo(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const organization = await adminService.uploadOrganizationLogo(
@@ -152,6 +163,51 @@ export class AdminController {
     }
   }
 
+  async deleteUser(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const result = await adminService.deleteUser(req.user!, req.params.id);
+      ApiResponse.success(res, result, 'User deleted');
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async resendUserInvite(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const result = await adminService.resendUserInvite(req.user!, req.params.id);
+      ApiResponse.success(res, result, 'Invite resent');
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async forceLogoutUser(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const result = await adminService.forceLogoutUser(req.user!, req.params.id);
+      ApiResponse.success(res, result, 'User signed out of all devices');
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async bulkInviteUsers(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const result = await adminService.bulkInviteUsers(req.user!, req.body);
+      ApiResponse.success(res, result, 'Bulk invite processed');
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async impersonateUser(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const result = await adminService.impersonateUser(req.user!, req.params.id);
+      ApiResponse.success(res, result, 'Impersonation token issued');
+    } catch (error) {
+      next(error);
+    }
+  }
+
   async listSubscriptions(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const subscriptions = await adminService.listSubscriptions(req.user!, req.query as never);
@@ -191,6 +247,220 @@ export class AdminController {
     try {
       const subscription = await adminService.updateSubscription(req.user!, req.params.id, req.body);
       ApiResponse.success(res, subscription, 'Subscription updated');
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async renewSubscription(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const subscription = await adminService.renewSubscription(req.user!, req.params.id, req.body);
+      ApiResponse.success(res, subscription, 'Subscription renewed');
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async approveSubscription(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const subscription = await adminService.approveSubscription(req.user!, req.params.id);
+      ApiResponse.success(res, subscription, 'Subscription approved');
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async rejectSubscription(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const subscription = await adminService.rejectSubscription(
+        req.user!,
+        req.params.id,
+        req.body?.reason ?? null,
+      );
+      ApiResponse.success(res, subscription, 'Subscription rejected');
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  // #1 Scheduled subscription sweep. Invoked by Vercel cron via GET with an
+  // `Authorization: Bearer <CRON_SECRET>` header instead of a user JWT, so this
+  // handler is mounted before the auth/role guards and authorizes itself.
+  async subscriptionSweep(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const header = req.headers.authorization ?? '';
+      if (header !== `Bearer ${env.CRON_SECRET}`) {
+        ApiResponse.error(res, 'Unauthorized', 401);
+        return;
+      }
+      const summary = await licensingService.sweepSubscriptions();
+      ApiResponse.success(res, summary, 'Subscription sweep completed');
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async listPaymentProviders(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      ApiResponse.success(res, await adminService.listPaymentProviders(req.user!));
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async updatePaymentProvider(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      ApiResponse.success(
+        res,
+        await adminService.updatePaymentProvider(req.user!, req.body),
+        'Payment provider updated',
+      );
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async recordOfflinePayment(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      ApiResponse.created(
+        res,
+        await adminService.recordOfflinePayment(req.user!, req.body),
+        'Offline payment recorded',
+      );
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async createHardwareActivationKey(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      ApiResponse.created(
+        res,
+        await adminService.createHardwareActivationKey(req.user!, req.body),
+        'Hardware activation key created',
+      );
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async bulkCreateHardwareActivationKeys(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      ApiResponse.created(
+        res,
+        await adminService.bulkCreateHardwareActivationKeys(req.user!, req.body),
+        'Hardware activation keys created',
+      );
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async exportHardwareActivationKeys(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      sendExport(res, await adminService.exportHardwareActivationKeys(req.user!, req.query as never));
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async listSubscriptionPayments(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      ApiResponse.success(
+        res,
+        await adminService.listSubscriptionPayments(req.user!, req.params.id),
+      );
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async resetHardwareActivation(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      ApiResponse.success(
+        res,
+        await adminService.resetHardwareActivation(req.user!, req.params.id),
+        'Hardware activation reset',
+      );
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async getSubscriptionDetails(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      ApiResponse.success(
+        res,
+        await adminService.getSubscriptionDetails(req.user!, req.params.id),
+      );
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async getOrganizationLicenseDetails(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      ApiResponse.success(
+        res,
+        await adminService.getOrganizationLicenseDetails(req.user!, req.params.id),
+      );
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async emailActivationKeysToOrgAdmin(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const organizationId = String(req.body?.organizationId ?? '');
+      if (!organizationId) {
+        ApiResponse.error(res, 'organizationId is required', 400);
+        return;
+      }
+      ApiResponse.success(
+        res,
+        await adminService.emailActivationKeysToOrgAdmin(req.user!, organizationId),
+        'Activation keys emailed to organization admin',
+      );
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async extendAiCredits(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      ApiResponse.created(
+        res,
+        await adminService.extendAiCredits(req.user!, req.body),
+        'AI credits extended',
+      );
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async recalculateLicenseUsage(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      ApiResponse.success(
+        res,
+        await adminService.recalculateOrganizationLicenseUsage(req.user!, req.params.id),
+        'License usage recalculated',
+      );
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async upsertOrganizationStorage(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      ApiResponse.success(
+        res,
+        await adminService.upsertOrganizationStorageConnection(
+          req.user!,
+          req.params.id,
+          req.body,
+        ),
+        'Organization storage updated',
+      );
     } catch (error) {
       next(error);
     }

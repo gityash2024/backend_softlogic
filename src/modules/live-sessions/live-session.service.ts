@@ -356,6 +356,52 @@ export class LiveSessionService {
     };
   }
 
+  async verifySessionOnlyJoinCode(code: string) {
+    const liveSession = await this.findActiveSessionByCode(code);
+    if (!liveSession) {
+      throw new AppError('Invalid or expired session code', 404);
+    }
+    await this.ensureSessionOnlyAllowed(liveSession.organizationId);
+    return {
+      liveSessionId: liveSession.id,
+      title: liveSession.title,
+      canvasId: liveSession.canvasId,
+      organizationId: liveSession.organizationId,
+      expiresAt: liveSession.joinCodeExpiresAt,
+      sessionOnly: true,
+    };
+  }
+
+  async joinSessionOnlyByCode(input: { code: string; displayName?: string }) {
+    const liveSession = await this.findActiveSessionByCode(input.code);
+    if (!liveSession) {
+      throw new AppError('Invalid or expired session code', 404);
+    }
+    await this.ensureSessionOnlyAllowed(liveSession.organizationId);
+    const token = randomBytes(24).toString('base64url');
+    const guest = await prisma.liveSessionGuestParticipant.create({
+      data: {
+        liveSessionId: liveSession.id,
+        organizationId: liveSession.organizationId,
+        displayName: input.displayName?.trim() || 'Student',
+        joinTokenHash: createHash('sha256').update(token).digest('hex'),
+        role: LiveSessionParticipantRole.STUDENT,
+        expiresAt: liveSession.joinCodeExpiresAt ?? new Date(Date.now() + DEFAULT_SESSION_CODE_TTL_MINUTES * 60 * 1000),
+        joinedAt: new Date(),
+        metadata: { joinMode: 'SESSION_ONLY_QR' },
+      },
+    });
+    await this.writeEvent(liveSession.id, null, 'SESSION_ONLY_STUDENT_JOINED', {
+      guestParticipantId: guest.id,
+      displayName: guest.displayName,
+    });
+    return {
+      liveSession,
+      guestParticipant: guest,
+      guestJoinToken: token,
+    };
+  }
+
   async joinByCode(user: AuthenticatedUserLike & { email?: string }, code: string) {
     const sessionCode = await this.findActiveSessionByCode(code);
     if (sessionCode) {
@@ -479,6 +525,11 @@ export class LiveSessionService {
     if (!file && !input.publicUrl) {
       throw new AppError('A file or publicUrl is required', 400);
     }
+    const liveSession = await prisma.liveSession.findUnique({
+      where: { id: liveSessionId },
+      select: { organizationId: true },
+    });
+    await this.ensureOrganizationStorageReady(liveSession?.organizationId ?? null);
 
     const storedFile = file
       ? await fileStorageService.storeFile(`live-sessions/${liveSessionId}`, file)
@@ -518,7 +569,8 @@ export class LiveSessionService {
     },
     file?: Express.Multer.File,
   ) {
-    await this.ensureHostAccess(user, liveSessionId);
+    const liveSession = await this.ensureHostAccess(user, liveSessionId);
+    await this.ensureOrganizationStorageReady(liveSession.organizationId);
     const storedFile = file
       ? await fileStorageService.storeFile(`live-sessions/${liveSessionId}`, file)
       : null;
@@ -801,6 +853,36 @@ export class LiveSessionService {
       },
       include: this.includeSummary(),
     });
+  }
+
+  private async ensureSessionOnlyAllowed(organizationId: string | null) {
+    if (!organizationId) {
+      throw new AppError('Session-only join requires an organization-scoped session', 403);
+    }
+    const organization = await prisma.organization.findUnique({
+      where: { id: organizationId },
+      select: { sessionOnlyJoinEnabled: true, studentLoginEnabled: true, status: true },
+    });
+    if (!organization || organization.status !== 'ACTIVE') {
+      throw new AppError('Organization is not active for session join', 403);
+    }
+    if (!organization.sessionOnlyJoinEnabled || organization.studentLoginEnabled) {
+      throw new AppError('Session-only QR access is not enabled for this organization', 403);
+    }
+  }
+
+  private async ensureOrganizationStorageReady(organizationId: string | null) {
+    if (!organizationId) return;
+    const organization = await prisma.organization.findUnique({
+      where: { id: organizationId },
+      select: { storageStatus: true, storageProvider: true },
+    });
+    if (
+      !organization?.storageProvider ||
+      organization.storageStatus !== 'CONNECTED'
+    ) {
+      throw new AppError('Organization cloud storage must be connected before saving organization content', 403);
+    }
   }
 
   private studentCanPublish(value: Prisma.JsonValue): boolean {

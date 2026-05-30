@@ -22,11 +22,11 @@ export const canManageRole = (
   }
 
   if (actorRole === 'PARTNER_ADMIN') {
-    return ['CUSTOMER_ADMIN', 'TEACHER', 'STUDENT'].includes(targetRole);
+    return ['CUSTOMER_ADMIN', 'TEACHER', 'STUDENT', 'PARENT'].includes(targetRole);
   }
 
   if (actorRole === 'CUSTOMER_ADMIN' || actorRole === 'ADMIN') {
-    return ['TEACHER', 'STUDENT'].includes(targetRole);
+    return ['TEACHER', 'STUDENT', 'PARENT'].includes(targetRole);
   }
 
   return false;
@@ -61,18 +61,25 @@ export const getManagedOrganizationIds = async (
 
   const membershipOrganizationIds = await getMembershipOrganizationIds(user.userId);
   if (user.role === 'PARTNER_ADMIN') {
-    const childOrganizations = await prisma.organization.findMany({
-      where: {
-        parentOrganizationId: { in: membershipOrganizationIds },
-        kind: OrganizationKind.CUSTOMER,
-      },
-      select: { id: true },
-    });
+    const managedIds = new Set(membershipOrganizationIds);
+    let frontier = membershipOrganizationIds;
 
-    return [
-      ...membershipOrganizationIds,
-      ...childOrganizations.map((organization) => organization.id),
-    ];
+    while (frontier.length > 0) {
+      const children = await prisma.organization.findMany({
+        where: {
+          parentOrganizationId: { in: frontier },
+          kind: { in: [OrganizationKind.PARTNER, OrganizationKind.CUSTOMER] },
+          deletedAt: null,
+        },
+        select: { id: true },
+      });
+      frontier = children
+        .map((organization) => organization.id)
+        .filter((id) => !managedIds.has(id));
+      frontier.forEach((id) => managedIds.add(id));
+    }
+
+    return Array.from(managedIds);
   }
 
   if (user.role === 'CUSTOMER_ADMIN' || user.role === 'ADMIN') {
@@ -133,7 +140,7 @@ export const ensureOrganizationManaged = async (
     const organization = await prisma.organization.findUnique({
       where: { id: organizationId },
     });
-    if (!organization) {
+    if (!organization || organization.deletedAt) {
       throw new AppError('Organization not found', 404);
     }
     return organization;
@@ -147,7 +154,7 @@ export const ensureOrganizationManaged = async (
   const organization = await prisma.organization.findUnique({
     where: { id: organizationId },
   });
-  if (!organization) {
+  if (!organization || organization.deletedAt) {
     throw new AppError('Organization not found', 404);
   }
   return organization;

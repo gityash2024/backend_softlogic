@@ -169,7 +169,7 @@ describe('AdminService dashboard overview', () => {
       expect.objectContaining({ where: { deletedAt: null } }),
     );
     expect(mockedPrisma.organization.findMany).toHaveBeenCalledWith(
-      expect.objectContaining({ where: {} }),
+      expect.objectContaining({ where: { deletedAt: null } }),
     );
     expect(mockedPrisma.subscription.findMany).toHaveBeenCalledWith(
       expect.objectContaining({ where: {} }),

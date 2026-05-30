@@ -47,6 +47,38 @@ interface WelcomeEmailOptions {
   readonly downloadPageUrl?: string;
 }
 
+interface PasswordSetupEmailOptions {
+  readonly to: string;
+  readonly name?: string | null;
+  readonly role?: string | null;
+  readonly organizationName?: string | null;
+  readonly setupUrl: string;
+  readonly expiresInLabel?: string;
+}
+
+interface PasswordResetEmailOptions {
+  readonly to: string;
+  readonly name?: string | null;
+  readonly role?: string | null;
+  readonly resetUrl: string;
+  readonly expiresInLabel?: string;
+}
+
+interface PasswordChangedEmailOptions {
+  readonly to: string;
+  readonly name?: string | null;
+}
+
+interface ForcedLogoutEmailOptions {
+  readonly to: string;
+  readonly name?: string | null;
+}
+
+interface SessionsRevokedEmailOptions {
+  readonly to: string;
+  readonly name?: string | null;
+}
+
 export const sendEmail = async (options: EmailOptions): Promise<void> => {
   try {
     await transporter.sendMail({
@@ -460,6 +492,890 @@ export const sendWelcomeEmail = async ({
   } catch (error) {
     console.error(`Welcome email failed for ${to}:`, error);
   }
+};
+
+const DEFAULT_PASSWORD_SETUP_EXPIRY_LABEL = '7 days';
+
+export const getPasswordSetupEmailHtml = ({
+  name,
+  role,
+  organizationName,
+  setupUrl,
+  expiresInLabel = DEFAULT_PASSWORD_SETUP_EXPIRY_LABEL,
+}: Omit<PasswordSetupEmailOptions, 'to'>): string => {
+  const safeName = escapeHtml(name?.trim() || 'there');
+  const safeRole = escapeHtml(formatRoleLabel(role));
+  const safeOrganizationName = escapeHtml(
+    organizationName?.trim() || 'your organization',
+  );
+  const safeSetupUrl = escapeHtml(setupUrl);
+  const safeExpiresInLabel = escapeHtml(expiresInLabel);
+
+  return renderBrandEmailLayout({
+    preheader:
+      'Your SoftLogic administrator account is ready. Set your password to continue.',
+    eyebrow: 'SoftLogic administrator access',
+    heroTitle: 'Your organization workspace is ready.',
+    heroCopy:
+      'Set your admin password to manage teachers, licenses, storage, and launch settings.',
+    title: `Welcome, ${safeName}`,
+    intro: `An administrator account has been created for ${safeOrganizationName}. Your role is set to ${safeRole}.`,
+    spotlightHtml: `
+      <p class="spotlight-label">Set Your Password</p>
+      <a
+        href="${safeSetupUrl}"
+        style="
+          display: inline-block;
+          padding: 14px 24px;
+          border-radius: 999px;
+          background: #08357c;
+          color: #ffffff;
+          font-size: 15px;
+          font-weight: 800;
+          text-decoration: none;
+        "
+      >
+        Create admin password
+      </a>
+      <p style="margin: 18px 0 0; color: #475467; font-size: 14px; line-height: 1.6;">
+        This secure setup link expires in ${safeExpiresInLabel}.
+      </p>
+    `,
+    outro:
+      'After your password is set, use this email address and password to sign in to the SoftLogic web admin panel.',
+    securityHtml: `
+      <div class="security-panel">
+        <p class="security-title">Security reminder</p>
+        <p class="security-copy">
+          If you did not expect this administrator invite, ignore this email and contact SoftLogic support.
+        </p>
+      </div>
+    `,
+  });
+};
+
+export const sendPasswordSetupEmail = async ({
+  to,
+  ...templateOptions
+}: PasswordSetupEmailOptions): Promise<boolean> => {
+  try {
+    const brandLogoAttachments = getBrandLogoEmailAttachments();
+    await sendEmail({
+      attachments:
+        brandLogoAttachments.length > 0 ? brandLogoAttachments : undefined,
+      to,
+      subject: 'Set up your SoftLogic admin password',
+      html: getPasswordSetupEmailHtml(templateOptions),
+    });
+    return true;
+  } catch (error) {
+    console.error(`Password setup email failed for ${to}:`, error);
+    return false;
+  }
+};
+
+export const getPasswordResetEmailHtml = ({
+  name,
+  role,
+  resetUrl,
+  expiresInLabel = '24 hours',
+}: Omit<PasswordResetEmailOptions, 'to'>): string => {
+  const safeName = escapeHtml(name?.trim() || 'there');
+  const safeRole = role ? escapeHtml(formatRoleLabel(role)) : null;
+  const safeResetUrl = escapeHtml(resetUrl);
+  const safeExpiresInLabel = escapeHtml(expiresInLabel);
+
+  return renderBrandEmailLayout({
+    preheader:
+      'A password reset was requested for your SoftLogic admin account.',
+    eyebrow: 'SoftLogic administrator access',
+    heroTitle: 'Reset your admin password.',
+    heroCopy:
+      'Choose a new password to keep managing teachers, licenses, and launch settings.',
+    title: `Hello, ${safeName}`,
+    intro: safeRole
+      ? `We received a request to reset the password for your ${safeRole} account.`
+      : 'We received a request to reset the password for your SoftLogic admin account.',
+    spotlightHtml: `
+      <p class="spotlight-label">Reset Your Password</p>
+      <a
+        href="${safeResetUrl}"
+        style="
+          display: inline-block;
+          padding: 14px 24px;
+          border-radius: 999px;
+          background: #08357c;
+          color: #ffffff;
+          font-size: 15px;
+          font-weight: 800;
+          text-decoration: none;
+        "
+      >
+        Choose a new password
+      </a>
+      <p style="margin: 18px 0 0; color: #475467; font-size: 14px; line-height: 1.6;">
+        This secure reset link expires in ${safeExpiresInLabel}.
+      </p>
+    `,
+    outro:
+      'After your new password is set, use this email and password to sign in to the SoftLogic web admin panel.',
+    securityHtml: `
+      <div class="security-panel">
+        <p class="security-title">Didn't request this?</p>
+        <p class="security-copy">
+          If you did not request a password reset, ignore this email — your current password remains active. For peace of mind, contact SoftLogic support.
+        </p>
+      </div>
+    `,
+  });
+};
+
+export const sendPasswordResetEmail = async ({
+  to,
+  ...templateOptions
+}: PasswordResetEmailOptions): Promise<boolean> => {
+  try {
+    const brandLogoAttachments = getBrandLogoEmailAttachments();
+    await sendEmail({
+      attachments:
+        brandLogoAttachments.length > 0 ? brandLogoAttachments : undefined,
+      to,
+      subject: 'Reset your SoftLogic admin password',
+      html: getPasswordResetEmailHtml(templateOptions),
+    });
+    return true;
+  } catch (error) {
+    console.error(`Password reset email failed for ${to}:`, error);
+    return false;
+  }
+};
+
+export const getPasswordChangedEmailHtml = ({
+  name,
+}: Omit<PasswordChangedEmailOptions, 'to'>): string => {
+  const safeName = escapeHtml(name?.trim() || 'there');
+
+  return renderBrandEmailLayout({
+    preheader: 'Your SoftLogic admin password was changed.',
+    eyebrow: 'SoftLogic administrator access',
+    heroTitle: 'Your admin password was changed.',
+    heroCopy:
+      'This is a confirmation that your SoftLogic admin password was updated.',
+    title: `Hello, ${safeName}`,
+    intro: 'Your SoftLogic admin password was changed.',
+    spotlightHtml: `
+      <p class="spotlight-label">Password updated</p>
+      <p style="margin: 6px 0 0; color: #101828; font-size: 16px; font-weight: 700;">
+        Your account password has been successfully changed.
+      </p>
+    `,
+    outro:
+      'For your security, you may need to sign in again on your other devices.',
+    securityHtml: `
+      <div class="security-panel">
+        <p class="security-title">Didn't do this?</p>
+        <p class="security-copy">
+          If you didn't do this, contact your workspace owner immediately.
+        </p>
+      </div>
+    `,
+  });
+};
+
+export const sendPasswordChangedEmail = async ({
+  to,
+  ...templateOptions
+}: PasswordChangedEmailOptions): Promise<boolean> => {
+  try {
+    const brandLogoAttachments = getBrandLogoEmailAttachments();
+    await sendEmail({
+      attachments:
+        brandLogoAttachments.length > 0 ? brandLogoAttachments : undefined,
+      to,
+      subject: 'Your SoftLogic admin password was changed',
+      html: getPasswordChangedEmailHtml(templateOptions),
+    });
+    return true;
+  } catch (error) {
+    console.error(`Password changed email failed for ${to}:`, error);
+    return false;
+  }
+};
+
+export const getForcedLogoutEmailHtml = ({
+  name,
+}: Omit<ForcedLogoutEmailOptions, 'to'>): string => {
+  const safeName = escapeHtml(name?.trim() || 'there');
+
+  return renderBrandEmailLayout({
+    preheader: 'You were signed out of all devices by an administrator.',
+    eyebrow: 'SoftLogic account security',
+    heroTitle: 'You were signed out of all devices.',
+    heroCopy:
+      'An administrator signed your account out everywhere. Sign in again to continue.',
+    title: `Hello, ${safeName}`,
+    intro:
+      'You were signed out of all devices by an administrator. You will need to sign in again to continue using SoftLogic.',
+    spotlightHtml: `
+      <p class="spotlight-label">Sessions ended</p>
+      <p style="margin: 6px 0 0; color: #101828; font-size: 16px; font-weight: 700;">
+        All active sessions for your account have been signed out.
+      </p>
+    `,
+    outro:
+      'If you still need access, simply sign in again on any device.',
+    securityHtml: `
+      <div class="security-panel">
+        <p class="security-title">Didn't expect this?</p>
+        <p class="security-copy">
+          If you did not expect to be signed out, contact your SoftLogic administrator.
+        </p>
+      </div>
+    `,
+  });
+};
+
+export const sendForcedLogoutEmail = async ({
+  to,
+  ...templateOptions
+}: ForcedLogoutEmailOptions): Promise<boolean> => {
+  try {
+    const brandLogoAttachments = getBrandLogoEmailAttachments();
+    await sendEmail({
+      attachments:
+        brandLogoAttachments.length > 0 ? brandLogoAttachments : undefined,
+      to,
+      subject: 'You were signed out of all devices',
+      html: getForcedLogoutEmailHtml(templateOptions),
+    });
+    return true;
+  } catch (error) {
+    console.error(`Forced logout email failed for ${to}:`, error);
+    return false;
+  }
+};
+
+export const getSessionsRevokedEmailHtml = ({
+  name,
+}: Omit<SessionsRevokedEmailOptions, 'to'>): string => {
+  const safeName = escapeHtml(name?.trim() || 'there');
+
+  return renderBrandEmailLayout({
+    preheader: 'Your sessions were signed out by an administrator.',
+    eyebrow: 'SoftLogic account security',
+    heroTitle: 'Your sessions were signed out.',
+    heroCopy:
+      'An administrator signed your account out of all sessions. Sign in again to continue.',
+    title: `Hello, ${safeName}`,
+    intro:
+      'Your active sessions were signed out by an administrator. You will need to sign in again to continue using SoftLogic.',
+    spotlightHtml: `
+      <p class="spotlight-label">Sessions ended</p>
+      <p style="margin: 6px 0 0; color: #101828; font-size: 16px; font-weight: 700;">
+        All active sessions for your account have been signed out.
+      </p>
+    `,
+    outro: 'If you still need access, simply sign in again on any device.',
+    securityHtml: `
+      <div class="security-panel">
+        <p class="security-title">Didn't expect this?</p>
+        <p class="security-copy">
+          If you did not expect to be signed out, contact your SoftLogic administrator.
+        </p>
+      </div>
+    `,
+  });
+};
+
+export const sendSessionsRevokedEmail = async ({
+  to,
+  ...templateOptions
+}: SessionsRevokedEmailOptions): Promise<boolean> => {
+  try {
+    const brandLogoAttachments = getBrandLogoEmailAttachments();
+    await sendEmail({
+      attachments:
+        brandLogoAttachments.length > 0 ? brandLogoAttachments : undefined,
+      to,
+      subject: 'Your sessions were signed out',
+      html: getSessionsRevokedEmailHtml(templateOptions),
+    });
+    return true;
+  } catch (error) {
+    console.error(`Sessions revoked email failed for ${to}:`, error);
+    return false;
+  }
+};
+
+interface ActivationKeyEmailEntry {
+  readonly label: string;
+  readonly status: string;
+  readonly expiresAt: string | null;
+  readonly plain: string;
+}
+
+interface SendActivationKeysEmailOptions {
+  readonly to: string;
+  readonly organizationName: string;
+  readonly adminName?: string | null;
+  readonly keys: ActivationKeyEmailEntry[];
+}
+
+const renderActivationKeysTable = (keys: ActivationKeyEmailEntry[]): string => {
+  if (keys.length === 0) {
+    return `<p style="margin:12px 0; color:#475467; font-size:14px;">No active keys are available to share at this time.</p>`;
+  }
+  const rows = keys
+    .map(
+      (entry) => `
+        <tr>
+          <td style="padding:10px 12px; border-bottom:1px solid #e4e7ec; font-size:13px; color:#1f2937;">${escapeHtml(entry.label)}</td>
+          <td style="padding:10px 12px; border-bottom:1px solid #e4e7ec; font-size:13px; color:#1f2937; font-family: 'Menlo', monospace;">${escapeHtml(entry.plain)}</td>
+          <td style="padding:10px 12px; border-bottom:1px solid #e4e7ec; font-size:13px; color:#475467;">${escapeHtml(entry.status)}</td>
+          <td style="padding:10px 12px; border-bottom:1px solid #e4e7ec; font-size:13px; color:#475467;">${escapeHtml(entry.expiresAt ?? '—')}</td>
+        </tr>`,
+    )
+    .join('');
+  return `
+    <table style="width:100%; border-collapse:collapse; background:#ffffff; border:1px solid #e4e7ec; border-radius:12px; overflow:hidden;">
+      <thead>
+        <tr style="background:#f9fafb;">
+          <th style="text-align:left; padding:10px 12px; font-size:12px; text-transform:uppercase; color:#475467;">Label</th>
+          <th style="text-align:left; padding:10px 12px; font-size:12px; text-transform:uppercase; color:#475467;">Key</th>
+          <th style="text-align:left; padding:10px 12px; font-size:12px; text-transform:uppercase; color:#475467;">Status</th>
+          <th style="text-align:left; padding:10px 12px; font-size:12px; text-transform:uppercase; color:#475467;">Expires</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+};
+
+export const sendActivationKeysEmail = async ({
+  to,
+  organizationName,
+  adminName,
+  keys,
+}: SendActivationKeysEmailOptions): Promise<void> => {
+  const safeOrgName = escapeHtml(organizationName);
+  const safeAdminName = escapeHtml((adminName ?? '').trim() || 'there');
+  const html = renderBrandEmailLayout({
+    preheader: `${organizationName} activation keys`,
+    eyebrow: 'License Activation Keys',
+    title: `Activation keys for ${organizationName}`,
+    intro: `Hi ${safeAdminName}, here is the current list of activation keys issued for <strong>${safeOrgName}</strong>. Each key locks to the first device that activates it. Keep this email secure.`,
+    spotlightHtml: renderActivationKeysTable(keys),
+    outro:
+      'If a teammate needs to activate a different device, request a reset from the SoftLogic super admin in the web admin panel.',
+    securityHtml: `
+      <div class="security-panel">
+        <p class="security-title">Security reminder</p>
+        <p class="security-copy">
+          Treat activation keys like passwords. Each key locks to the first device that successfully activates it.
+        </p>
+      </div>
+    `,
+  });
+  await sendEmail({
+    attachments: getBrandLogoEmailAttachments(),
+    to,
+    subject: `Activation keys for ${organizationName}`,
+    html,
+  });
+};
+
+interface SeatUsageWarningEmailOptions {
+  readonly to: string;
+  readonly orgName: string;
+  readonly seatUsage: number;
+  readonly seatLimit: number;
+  readonly pct: number;
+  readonly adminName?: string | null;
+}
+
+export const getSeatUsageWarningEmailHtml = ({
+  orgName,
+  seatUsage,
+  seatLimit,
+  pct,
+  adminName,
+}: Omit<SeatUsageWarningEmailOptions, 'to'>): string => {
+  const safeOrgName = escapeHtml(orgName);
+  const safeAdminName = escapeHtml((adminName ?? '').trim() || 'there');
+  const atCapacity = pct >= 100;
+  const remaining = Math.max(seatLimit - seatUsage, 0);
+  return renderBrandEmailLayout({
+    preheader: `${orgName} is using ${pct}% of its licensed seats.`,
+    eyebrow: 'License Usage Alert',
+    heroTitle: atCapacity ? 'Your seats are full.' : 'Your seats are filling up.',
+    heroCopy:
+      'Keep your team productive by reviewing seat usage before you run out of licenses.',
+    title: atCapacity
+      ? `${safeOrgName} has reached its seat limit`
+      : `${safeOrgName} is at ${pct}% seat usage`,
+    intro: `Hi ${safeAdminName}, your organization <strong>${safeOrgName}</strong> is currently using <strong>${seatUsage}</strong> of <strong>${seatLimit}</strong> licensed seats (${pct}%).`,
+    spotlightHtml: `
+      <p class="spotlight-label">Seat Usage</p>
+      <p style="margin:6px 0 0; font-size:34px; font-weight:800; color:#08357c;">${seatUsage} / ${seatLimit}</p>
+      <p style="margin:10px 0 0; color:#475467; font-size:14px;">${
+        atCapacity
+          ? 'All seats are in use. New licensed users cannot be added until seats are freed or your plan is upgraded.'
+          : `${remaining} seat${remaining === 1 ? '' : 's'} remaining.`
+      }</p>
+    `,
+    outro:
+      'To request additional seats, contact the SoftLogic super admin or open a support request from your admin panel.',
+    securityHtml: null,
+  });
+};
+
+export const sendSeatUsageWarningEmail = async ({
+  to,
+  ...templateOptions
+}: SeatUsageWarningEmailOptions): Promise<boolean> => {
+  try {
+    await sendEmail({
+      attachments: getBrandLogoEmailAttachments(),
+      to,
+      subject:
+        templateOptions.pct >= 100
+          ? `${templateOptions.orgName}: seat limit reached`
+          : `${templateOptions.orgName}: ${templateOptions.pct}% of seats in use`,
+      html: getSeatUsageWarningEmailHtml(templateOptions),
+    });
+    return true;
+  } catch (error) {
+    console.error(`Seat usage warning email failed for ${to}:`, error);
+    return false;
+  }
+};
+
+interface SubscriptionExpiryEmailOptions {
+  readonly to: string;
+  readonly orgName: string;
+  readonly endDate: Date | string;
+  readonly daysLeft: number;
+  readonly adminName?: string | null;
+}
+
+const formatExpiryDate = (value: Date | string): string => {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return '—';
+  return date.toLocaleDateString('en-US', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+    timeZone: 'UTC',
+  });
+};
+
+export const getSubscriptionExpiryEmailHtml = ({
+  orgName,
+  endDate,
+  daysLeft,
+  adminName,
+}: Omit<SubscriptionExpiryEmailOptions, 'to'>): string => {
+  const safeOrgName = escapeHtml(orgName);
+  const safeAdminName = escapeHtml((adminName ?? '').trim() || 'there');
+  const safeEndDate = escapeHtml(formatExpiryDate(endDate));
+  const expired = daysLeft <= 0;
+  const daysLabel = expired
+    ? 'today'
+    : `in ${daysLeft} day${daysLeft === 1 ? '' : 's'}`;
+  return renderBrandEmailLayout({
+    preheader: expired
+      ? `${orgName}'s subscription expires today.`
+      : `${orgName}'s subscription expires in ${daysLeft} day${daysLeft === 1 ? '' : 's'}.`,
+    eyebrow: 'Subscription Reminder',
+    heroTitle: expired
+      ? 'Your subscription expires today.'
+      : 'Your subscription is expiring soon.',
+    heroCopy:
+      'Renew before it expires to keep uninterrupted access for your whole organization.',
+    title: expired
+      ? `${safeOrgName}'s subscription expires today`
+      : `${safeOrgName}'s subscription expires ${daysLabel}`,
+    intro: `Hi ${safeAdminName}, the subscription for <strong>${safeOrgName}</strong> ends on <strong>${safeEndDate}</strong> (${daysLabel}). Renew to avoid any interruption to your team's access.`,
+    spotlightHtml: `
+      <p class="spotlight-label">Expires On</p>
+      <p style="margin:6px 0 0; font-size:28px; font-weight:800; color:#08357c;">${safeEndDate}</p>
+      <p style="margin:10px 0 0; color:#475467; font-size:14px;">${
+        expired
+          ? 'Once expired, licensed users will lose access until the subscription is renewed.'
+          : `${daysLeft} day${daysLeft === 1 ? '' : 's'} remaining.`
+      }</p>
+    `,
+    outro:
+      'To renew, contact the SoftLogic super admin or open a support request from your admin panel.',
+    securityHtml: null,
+  });
+};
+
+export const sendSubscriptionExpiryEmail = async ({
+  to,
+  ...templateOptions
+}: SubscriptionExpiryEmailOptions): Promise<boolean> => {
+  try {
+    await sendEmail({
+      attachments: getBrandLogoEmailAttachments(),
+      to,
+      subject:
+        templateOptions.daysLeft <= 0
+          ? `${templateOptions.orgName}: subscription expires today`
+          : `${templateOptions.orgName}: subscription expires in ${templateOptions.daysLeft} day${templateOptions.daysLeft === 1 ? '' : 's'}`,
+      html: getSubscriptionExpiryEmailHtml(templateOptions),
+    });
+    return true;
+  } catch (error) {
+    console.error(`Subscription expiry email failed for ${to}:`, error);
+    return false;
+  }
+};
+
+interface SubscriptionPendingEmailOptions {
+  readonly to: string;
+  readonly name?: string | null;
+  readonly planName: string;
+  readonly organizationName?: string | null;
+  readonly seatLimit?: number;
+  readonly forSuperAdmin?: boolean;
+  readonly requestedByName?: string | null;
+}
+
+const seatCountLabel = (seatLimit?: number): string =>
+  typeof seatLimit === 'number' ? `${seatLimit} seat${seatLimit === 1 ? '' : 's'}` : '—';
+
+export const getSubscriptionPendingEmailHtml = ({
+  name,
+  planName,
+  organizationName,
+  seatLimit,
+  forSuperAdmin,
+  requestedByName,
+}: Omit<SubscriptionPendingEmailOptions, 'to'>): string => {
+  const safePlan = escapeHtml(planName);
+  const safeOrg = escapeHtml((organizationName ?? '').trim() || 'your organization');
+  const safeName = escapeHtml((name ?? '').trim() || 'there');
+  const safeRequestedBy = escapeHtml((requestedByName ?? '').trim() || 'An organization admin');
+  const seatLabel = seatCountLabel(seatLimit);
+  if (forSuperAdmin) {
+    return renderBrandEmailLayout({
+      preheader: `${safeOrg} requested the ${planName} plan and needs your approval.`,
+      eyebrow: 'Approval Needed',
+      heroTitle: 'A subscription needs your approval.',
+      heroCopy:
+        'An organization admin submitted a subscription request that is waiting for Super Admin review.',
+      title: `${safeOrg} requested the ${safePlan} plan`,
+      intro: `Hi ${safeName}, ${safeRequestedBy} requested a subscription for <strong>${safeOrg}</strong>. It is on hold in <strong>Pending Approval</strong> and grants no seats until you approve it.`,
+      spotlightHtml: `
+        <p class="spotlight-label">Requested Plan</p>
+        <p style="margin:6px 0 0; font-size:28px; font-weight:800; color:#08357c;">${safePlan}</p>
+        <p style="margin:10px 0 0; color:#475467; font-size:14px;">${seatLabel} · awaiting your approval</p>
+      `,
+      outro:
+        'Review and approve or reject this request from Subscriptions in your SoftLogic admin panel.',
+      securityHtml: null,
+    });
+  }
+  return renderBrandEmailLayout({
+    preheader: `Your ${planName} subscription request is pending approval.`,
+    eyebrow: 'Subscription Submitted',
+    heroTitle: 'Your subscription is pending approval.',
+    heroCopy:
+      'We received your subscription request. A SoftLogic Super Admin will review it shortly.',
+    title: `Your ${safePlan} request for ${safeOrg} is pending`,
+    intro: `Hi ${safeName}, your subscription request for <strong>${safeOrg}</strong> has been submitted and is currently <strong>Pending Approval</strong>. It is not active yet — licensed users cannot be added until a Super Admin approves it. We'll email you as soon as it's reviewed.`,
+    spotlightHtml: `
+      <p class="spotlight-label">Requested Plan</p>
+      <p style="margin:6px 0 0; font-size:28px; font-weight:800; color:#08357c;">${safePlan}</p>
+      <p style="margin:10px 0 0; color:#475467; font-size:14px;">${seatLabel} · awaiting Super Admin approval</p>
+    `,
+    outro:
+      'No action is needed from you right now. You will receive an email once your subscription is approved.',
+    securityHtml: null,
+  });
+};
+
+export const sendSubscriptionPendingEmail = async ({
+  to,
+  ...templateOptions
+}: SubscriptionPendingEmailOptions): Promise<boolean> => {
+  try {
+    const orgLabel = (templateOptions.organizationName ?? '').trim() || 'An organization';
+    await sendEmail({
+      attachments: getBrandLogoEmailAttachments(),
+      to,
+      subject: templateOptions.forSuperAdmin
+        ? `Approval needed: ${orgLabel} requested ${templateOptions.planName}`
+        : `Your ${templateOptions.planName} subscription is pending approval`,
+      html: getSubscriptionPendingEmailHtml(templateOptions),
+    });
+    return true;
+  } catch (error) {
+    console.error(`Subscription pending email failed for ${to}:`, error);
+    return false;
+  }
+};
+
+interface SubscriptionApprovedEmailOptions {
+  readonly to: string;
+  readonly name?: string | null;
+  readonly planName: string;
+  readonly organizationName?: string | null;
+  readonly seatLimit?: number;
+}
+
+export const getSubscriptionApprovedEmailHtml = ({
+  name,
+  planName,
+  organizationName,
+  seatLimit,
+}: Omit<SubscriptionApprovedEmailOptions, 'to'>): string => {
+  const safePlan = escapeHtml(planName);
+  const safeOrg = escapeHtml((organizationName ?? '').trim() || 'your organization');
+  const safeName = escapeHtml((name ?? '').trim() || 'there');
+  const seatLabel = seatCountLabel(seatLimit);
+  return renderBrandEmailLayout({
+    preheader: `Your ${planName} subscription is approved and active.`,
+    eyebrow: 'Subscription Approved',
+    heroTitle: 'Your subscription is now active.',
+    heroCopy: 'Your subscription request has been approved by a SoftLogic Super Admin.',
+    title: `${safePlan} is active for ${safeOrg}`,
+    intro: `Hi ${safeName}, great news — your subscription for <strong>${safeOrg}</strong> has been <strong>approved</strong> and is now active. You can start adding licensed users right away.`,
+    spotlightHtml: `
+      <p class="spotlight-label">Active Plan</p>
+      <p style="margin:6px 0 0; font-size:28px; font-weight:800; color:#08357c;">${safePlan}</p>
+      <p style="margin:10px 0 0; color:#475467; font-size:14px;">${seatLabel} now available</p>
+    `,
+    outro: 'You can manage users and seats from your SoftLogic admin panel.',
+    securityHtml: null,
+  });
+};
+
+export const sendSubscriptionApprovedEmail = async ({
+  to,
+  ...templateOptions
+}: SubscriptionApprovedEmailOptions): Promise<boolean> => {
+  try {
+    await sendEmail({
+      attachments: getBrandLogoEmailAttachments(),
+      to,
+      subject: `Your ${templateOptions.planName} subscription is approved`,
+      html: getSubscriptionApprovedEmailHtml(templateOptions),
+    });
+    return true;
+  } catch (error) {
+    console.error(`Subscription approved email failed for ${to}:`, error);
+    return false;
+  }
+};
+
+interface SubscriptionRejectedEmailOptions {
+  readonly to: string;
+  readonly name?: string | null;
+  readonly planName: string;
+  readonly organizationName?: string | null;
+  readonly reason?: string | null;
+}
+
+export const getSubscriptionRejectedEmailHtml = ({
+  name,
+  planName,
+  organizationName,
+  reason,
+}: Omit<SubscriptionRejectedEmailOptions, 'to'>): string => {
+  const safePlan = escapeHtml(planName);
+  const safeOrg = escapeHtml((organizationName ?? '').trim() || 'your organization');
+  const safeName = escapeHtml((name ?? '').trim() || 'there');
+  const trimmedReason = (reason ?? '').trim();
+  const safeReason = trimmedReason ? escapeHtml(trimmedReason) : null;
+  return renderBrandEmailLayout({
+    preheader: `Your ${planName} subscription request was not approved.`,
+    eyebrow: 'Subscription Update',
+    heroTitle: 'Your subscription request was not approved.',
+    heroCopy: 'A SoftLogic Super Admin reviewed your subscription request.',
+    title: `${safePlan} request for ${safeOrg} was not approved`,
+    intro: `Hi ${safeName}, your subscription request for <strong>${safeOrg}</strong> was <strong>not approved</strong>.${safeReason ? '' : ' You can submit a new request or reach out for more details.'}`,
+    spotlightHtml: safeReason
+      ? `
+      <p class="spotlight-label">Reason</p>
+      <p style="margin:6px 0 0; color:#475467; font-size:15px; line-height:1.5;">${safeReason}</p>
+    `
+      : `
+      <p class="spotlight-label">Requested Plan</p>
+      <p style="margin:6px 0 0; font-size:28px; font-weight:800; color:#08357c;">${safePlan}</p>
+    `,
+    outro:
+      'If you have questions, contact the SoftLogic super admin or open a support request from your admin panel. You can submit a new subscription request at any time.',
+    securityHtml: null,
+  });
+};
+
+export const sendSubscriptionRejectedEmail = async ({
+  to,
+  ...templateOptions
+}: SubscriptionRejectedEmailOptions): Promise<boolean> => {
+  try {
+    await sendEmail({
+      attachments: getBrandLogoEmailAttachments(),
+      to,
+      subject: `Update on your ${templateOptions.planName} subscription request`,
+      html: getSubscriptionRejectedEmailHtml(templateOptions),
+    });
+    return true;
+  } catch (error) {
+    console.error(`Subscription rejected email failed for ${to}:`, error);
+    return false;
+  }
+};
+
+interface SupportThreadCreatedEmailOptions {
+  readonly to: string;
+  readonly organizationName: string;
+  readonly threadId: string;
+  readonly category: string;
+  readonly subject: string;
+  readonly openedByName: string;
+}
+
+interface SupportReplyEmailOptions {
+  readonly to: string;
+  readonly organizationName: string;
+  readonly threadId: string;
+  readonly subject: string;
+  readonly replyAuthorName: string;
+  readonly replyExcerpt: string;
+  readonly audience: 'super_admin' | 'org_admin';
+}
+
+interface SupportStatusChangeEmailOptions {
+  readonly to: string;
+  readonly organizationName: string;
+  readonly threadId: string;
+  readonly subject: string;
+  readonly newStatus: string;
+  readonly changedByName: string;
+}
+
+const SUPPORT_CATEGORY_LABELS: Record<string, string> = {
+  REQUEST_SEATS: 'Request more seats',
+  EXTEND_SUBSCRIPTION: 'Extend subscription',
+  RESET_DEVICE: 'Reset activation device',
+  BILLING: 'Billing question',
+  ACTIVATION_ISSUE: 'Activation issue',
+  TECHNICAL: 'Technical issue',
+  USER_MANAGEMENT: 'User management',
+  GENERAL: 'General question',
+};
+
+const supportThreadUrl = (audience: 'super_admin' | 'org_admin', threadId: string): string => {
+  const base = env.PUBLIC_ADMIN_URL?.replace(/\/$/, '') ?? '';
+  const segment = audience === 'super_admin' ? 'support' : 'help';
+  return `${base}/${segment}/${threadId}`;
+};
+
+const supportButtonHtml = (label: string, href: string): string => `
+  <a href="${escapeHtml(href)}" style="display:inline-block; margin-top:18px; padding:12px 22px; background:#08357C; color:#ffffff; text-decoration:none; border-radius:10px; font-weight:700; font-size:14px;">${escapeHtml(label)}</a>
+`;
+
+export const sendSupportThreadCreatedEmail = async ({
+  to,
+  organizationName,
+  threadId,
+  category,
+  subject,
+  openedByName,
+}: SupportThreadCreatedEmailOptions): Promise<void> => {
+  const safeOrg = escapeHtml(organizationName);
+  const safeSubject = escapeHtml(subject);
+  const categoryLabel = escapeHtml(SUPPORT_CATEGORY_LABELS[category] ?? category);
+  const safeAuthor = escapeHtml(openedByName);
+  const threadUrl = supportThreadUrl('super_admin', threadId);
+  const html = renderBrandEmailLayout({
+    preheader: `New ${categoryLabel} thread from ${organizationName}`,
+    eyebrow: 'Support Inbox',
+    title: 'New support request',
+    intro: `<strong>${safeAuthor}</strong> from <strong>${safeOrg}</strong> opened a new ${categoryLabel.toLowerCase()} thread.`,
+    spotlightHtml: `
+      <p class="spotlight-label">Subject</p>
+      <p style="margin:6px 0 14px; font-size:18px; font-weight:700; color:#08357C;">${safeSubject}</p>
+      ${supportButtonHtml('Open in Support Inbox', threadUrl)}
+    `,
+    outro: 'You can reply or apply the requested change directly from the Support Inbox.',
+  });
+  await sendEmail({
+    attachments: getBrandLogoEmailAttachments(),
+    to,
+    subject: `[Support] ${organizationName}: ${subject}`,
+    html,
+  });
+};
+
+export const sendSupportReplyEmail = async ({
+  to,
+  organizationName,
+  threadId,
+  subject,
+  replyAuthorName,
+  replyExcerpt,
+  audience,
+}: SupportReplyEmailOptions): Promise<void> => {
+  const safeOrg = escapeHtml(organizationName);
+  const safeSubject = escapeHtml(subject);
+  const safeAuthor = escapeHtml(replyAuthorName);
+  const safeExcerpt = escapeHtml(replyExcerpt);
+  const threadUrl = supportThreadUrl(audience, threadId);
+  const label = audience === 'super_admin' ? 'Open in Support Inbox' : 'Open in Help';
+  const html = renderBrandEmailLayout({
+    preheader: `New reply from ${replyAuthorName}`,
+    eyebrow: audience === 'super_admin' ? 'Support Inbox' : 'Help',
+    title: `New reply on “${safeSubject}”`,
+    intro: `<strong>${safeAuthor}</strong> replied to the support thread for <strong>${safeOrg}</strong>.`,
+    spotlightHtml: `
+      <p class="spotlight-label">Reply</p>
+      <p style="margin:6px 0 14px; padding:12px 14px; background:#F2F4F7; border-radius:10px; color:#1F2937; font-size:14px; line-height:1.55; white-space:pre-wrap;">${safeExcerpt}</p>
+      ${supportButtonHtml(label, threadUrl)}
+    `,
+    outro: 'Reply or take action from the thread page.',
+  });
+  await sendEmail({
+    attachments: getBrandLogoEmailAttachments(),
+    to,
+    subject: `[Support reply] ${organizationName}: ${subject}`,
+    html,
+  });
+};
+
+export const sendSupportStatusChangeEmail = async ({
+  to,
+  organizationName,
+  threadId,
+  subject,
+  newStatus,
+  changedByName,
+}: SupportStatusChangeEmailOptions): Promise<void> => {
+  const safeOrg = escapeHtml(organizationName);
+  const safeSubject = escapeHtml(subject);
+  const safeStatus = escapeHtml(newStatus);
+  const safeWho = escapeHtml(changedByName);
+  const threadUrl = supportThreadUrl('org_admin', threadId);
+  const html = renderBrandEmailLayout({
+    preheader: `Status changed to ${newStatus}`,
+    eyebrow: 'Help',
+    title: `Your support thread is now ${safeStatus}`,
+    intro: `<strong>${safeWho}</strong> updated the status of <strong>${safeSubject}</strong> for <strong>${safeOrg}</strong>.`,
+    spotlightHtml: `
+      <p class="spotlight-label">New status</p>
+      <p style="margin:6px 0 14px; font-size:20px; font-weight:800; color:#08357C;">${safeStatus}</p>
+      ${supportButtonHtml('Open thread', threadUrl)}
+    `,
+    outro: 'You can reopen the thread by replying.',
+  });
+  await sendEmail({
+    attachments: getBrandLogoEmailAttachments(),
+    to,
+    subject: `[Support ${safeStatus}] ${organizationName}: ${subject}`,
+    html,
+  });
 };
 
 export const getLiveSessionInviteEmailHtml = ({

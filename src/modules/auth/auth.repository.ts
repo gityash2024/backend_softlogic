@@ -36,6 +36,30 @@ export class AuthRepository {
     });
   }
 
+  /**
+   * Finds a soft-deleted account that still owns this email address. On admin
+   * delete the live `email` is tombstoned and the original is preserved in
+   * `archivedEmail`; on self-delete the `email` is left intact. Matching either
+   * (case-insensitively) lets login surface a "suspended" message until a brand
+   * new account claims the same address.
+   */
+  async findDeletedUserByEmail(email: string): Promise<User | null> {
+    const normalized = email.trim();
+    if (!normalized) {
+      return null;
+    }
+    return prisma.user.findFirst({
+      where: {
+        deletedAt: { not: null },
+        OR: [
+          { email: { equals: normalized, mode: 'insensitive' } },
+          { archivedEmail: { equals: normalized, mode: 'insensitive' } },
+        ],
+      },
+      orderBy: { deletedAt: 'desc' },
+    });
+  }
+
   async createUser(data: Prisma.UserCreateInput): Promise<User> {
     return prisma.user.create({ data });
   }
@@ -52,6 +76,15 @@ export class AuthRepository {
     return prisma.otp.findFirst({
       where: { userId, type, usedAt: null },
       orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  async findOtpById(id: string): Promise<
+    Prisma.OtpGetPayload<{ include: { user: true } }> | null
+  > {
+    return prisma.otp.findUnique({
+      where: { id },
+      include: { user: true },
     });
   }
 
@@ -94,6 +127,15 @@ export class AuthRepository {
 
   async deleteAllUserSessions(userId: string): Promise<void> {
     await prisma.session.deleteMany({ where: { userId } });
+  }
+
+  async deleteOtherUserSessions(
+    userId: string,
+    keepRefreshToken: string,
+  ): Promise<void> {
+    await prisma.session.deleteMany({
+      where: { userId, refreshToken: { not: keepRefreshToken } },
+    });
   }
 
   async countRecentOtps(userId: string, type: OtpType, since: Date): Promise<number> {

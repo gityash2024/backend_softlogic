@@ -55,6 +55,10 @@ export const verifyJoinCodeSchema = z.object({
   code: z.string().trim().min(4).max(16),
 });
 
+export const sessionOnlyJoinSchema = verifyJoinCodeSchema.extend({
+  displayName: z.string().trim().min(1).max(120).optional(),
+});
+
 export const sendMessageSchema = z.object({
   type: z.nativeEnum(LiveSessionMessageType).default(LiveSessionMessageType.TEXT),
   body: z.string().max(5000).optional(),

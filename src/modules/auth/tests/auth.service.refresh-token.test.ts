@@ -27,11 +27,18 @@ jest.mock('@/modules/users/user-context.service', () => ({
   findUserContextById: jest.fn(),
 }));
 
+jest.mock('@/modules/licensing/licensing.service', () => ({
+  licensingService: {
+    assertOrganizationCanLogin: jest.fn(),
+  },
+}));
+
 jest.mock('@/shared/utils/jwt', () => ({
   generateTokenPair: jest.fn(),
   verifyRefreshToken: jest.fn(),
 }));
 
+import { env } from '@/config';
 import { authRepository } from '@/modules/auth/auth.repository';
 import { authService } from '@/modules/auth/auth.service';
 import { findUserContextById } from '@/modules/users/user-context.service';
@@ -45,6 +52,7 @@ const mockedVerifyRefreshToken = jest.mocked(verifyRefreshToken);
 describe('AuthService refresh token', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    env.TESTING_RELAX_AUTH_LIMITS = true;
 
     mockedAuthRepository.findUserById.mockResolvedValue({
       id: 'user-1',

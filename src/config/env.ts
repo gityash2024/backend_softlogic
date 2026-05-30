@@ -65,6 +65,7 @@ const envSchema = z.object({
   TURN_CREDENTIAL: optionalString,
   PUBLIC_DOWNLOAD_PAGE_URL: z.string().url().default('https://softlogicwhiteboard.com/download'),
   PUBLIC_APP_URL: z.string().url().default('https://softlogicwhiteboard.com'),
+  PUBLIC_ADMIN_URL: z.string().url().default('https://adminpanelsoftlogic.vercel.app'),
 
   // External content providers
   SERPER_API_KEY: optionalString,
@@ -77,6 +78,16 @@ const envSchema = z.object({
   GOOGLE_DRIVE_CLIENT_ID: optionalString,
   GOOGLE_DRIVE_CLIENT_SECRET: optionalString,
   GOOGLE_DRIVE_REDIRECT_URI: optionalUrl,
+  ONEDRIVE_CLIENT_ID: optionalString,
+  ONEDRIVE_CLIENT_SECRET: optionalString,
+  ONEDRIVE_REDIRECT_URI: optionalUrl,
+
+  // Activation key encryption (AES-256-GCM). Provide 32+ chars in production.
+  ACTIVATION_KEY_CIPHER_SECRET: optionalString,
+
+  // Secret used to authorize scheduled cron jobs (e.g. Vercel cron subscription sweep).
+  // The cron caller must send `Authorization: Bearer <CRON_SECRET>`.
+  CRON_SECRET: z.string().default('dev-cron-secret-change-me'),
 
   // S3-compatible storage placeholders for production file/recording storage
   STORAGE_BUCKET: optionalString,

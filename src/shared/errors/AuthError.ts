@@ -22,6 +22,13 @@ export class AuthError extends AppError {
     return new AuthError('You are not authorized to access this resource', 403);
   }
 
+  static accountSuspended(): AuthError {
+    return new AuthError(
+      'Your account has been suspended. Please contact your administrator.',
+      403,
+    );
+  }
+
   static otpExpired(): AuthError {
     return new AuthError('OTP has expired', 400);
   }

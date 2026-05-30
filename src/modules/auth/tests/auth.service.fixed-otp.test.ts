@@ -22,6 +22,12 @@ jest.mock('@/modules/users/user-context.service', () => ({
   findUserContextById: jest.fn(),
 }));
 
+jest.mock('@/modules/licensing/licensing.service', () => ({
+  licensingService: {
+    assertOrganizationCanLogin: jest.fn(),
+  },
+}));
+
 jest.mock('@/shared/utils/jwt', () => ({
   generateTokenPair: jest.fn(),
   verifyRefreshToken: jest.fn(),

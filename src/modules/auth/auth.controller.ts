@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { authService } from './auth.service';
 import { ApiResponse } from '@/shared/utils/api-response';
+import { AuthError } from '@/shared/errors/AuthError';
 
 export class AuthController {
   async sendOtp(req: Request, res: Response, next: NextFunction): Promise<void> {
@@ -119,6 +120,63 @@ export class AuthController {
       const { email } = req.body;
       const result = await authService.resendOtp(email);
       ApiResponse.success(res, result, 'OTP resent successfully');
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async validatePasswordSetup(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const { token } = req.body;
+      const result = await authService.validatePasswordSetupToken(token);
+      ApiResponse.success(res, result, 'Password setup token is valid');
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async completePasswordSetup(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const { token, password } = req.body;
+      const result = await authService.completePasswordSetup({ token, password }, req.ip);
+      ApiResponse.success(res, result, 'Password set successfully');
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async changePassword(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const { currentPassword, newPassword } = req.body;
+      const userId = req.user?.userId;
+      if (!userId) {
+        throw AuthError.invalidCredentials();
+      }
+      // Preserve the caller's current session when the client supplies its
+      // refresh token (body or header); otherwise all sessions are invalidated.
+      const keepRefreshToken =
+        (typeof req.body?.refreshToken === 'string' ? req.body.refreshToken : undefined) ??
+        (typeof req.headers['x-refresh-token'] === 'string'
+          ? (req.headers['x-refresh-token'] as string)
+          : undefined) ??
+        null;
+      const result = await authService.changePassword(
+        userId,
+        currentPassword,
+        newPassword,
+        { ipAddress: req.ip, keepRefreshToken },
+      );
+      ApiResponse.success(res, result, 'Password changed successfully');
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async requestPasswordReset(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const { email } = req.body;
+      const result = await authService.requestPasswordReset(email, req.ip);
+      ApiResponse.success(res, result, result.message);
     } catch (error) {
       next(error);
     }

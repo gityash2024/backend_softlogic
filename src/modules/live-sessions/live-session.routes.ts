@@ -21,6 +21,7 @@ import {
   raiseHandSchema,
   resolveHandSchema,
   sendMessageSchema,
+  sessionOnlyJoinSchema,
   shareUrlSchema,
   verifyJoinCodeSchema,
 } from './live-session.validator';
@@ -54,6 +55,19 @@ const uploadLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
 });
+
+router.post(
+  '/session-only/verify',
+  joinCodeLimiter,
+  validate(verifyJoinCodeSchema),
+  liveSessionController.verifySessionOnlyJoinCode,
+);
+router.post(
+  '/session-only/join',
+  joinCodeLimiter,
+  validate(sessionOnlyJoinSchema),
+  liveSessionController.joinSessionOnlyByCode,
+);
 
 router.use(authMiddleware);
 

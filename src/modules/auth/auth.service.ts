@@ -7,11 +7,12 @@ import {
   UserStatus,
 } from '@prisma/client';
 import bcrypt from 'bcrypt';
-import { randomUUID } from 'crypto';
+import { randomBytes, randomUUID } from 'crypto';
 import { existsSync, readFileSync } from 'fs';
 import { resolve } from 'path';
 
-import { env } from '@/config';
+import { env, prisma } from '@/config';
+import { licensingService } from '@/modules/licensing/licensing.service';
 import { findUserContextById } from '@/modules/users/user-context.service';
 import { AuthError } from '@/shared/errors/AuthError';
 import { AppError } from '@/shared/errors/AppError';
@@ -19,8 +20,11 @@ import {
   getBrandLogoEmailAttachments,
   getOtpEmailHtml,
   sendEmail,
+  sendPasswordChangedEmail,
+  sendPasswordResetEmail,
   sendWelcomeEmail,
 } from '@/shared/utils/email';
+import { writeAuditLog } from '@/shared/utils/audit';
 import { generateTokenPair, verifyRefreshToken } from '@/shared/utils/jwt';
 import {
   generateOtp,
@@ -46,6 +50,8 @@ const ADMIN_LOGIN_ROLES: UserRole[] = [
   UserRole.CUSTOMER_ADMIN,
   UserRole.ADMIN,
 ];
+const PASSWORD_RESET_EXPIRY_HOURS = 24;
+const PASSWORD_SETUP_EXPIRY_DAYS = 7;
 const GOOGLE_DESKTOP_AUTH_EXPIRY_MINUTES = 10;
 const GOOGLE_DESKTOP_POLL_INTERVAL_MS = 2000;
 const GOOGLE_AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
@@ -66,10 +72,26 @@ interface DesktopGoogleCallbackPageResponse {
 type DesktopGoogleCallbackVariant = 'success' | 'warning' | 'error';
 
 export class AuthService {
+  /**
+   * Resolves the error to throw when no usable active account matched the
+   * supplied email. If a soft-deleted account still owns the address, surface a
+   * clear "account suspended" message; otherwise fall back to the generic
+   * credentials error so unknown emails stay non-enumerable.
+   */
+  private async noActiveAccountError(email: string): Promise<AuthError> {
+    const suspended = await authRepository.findDeletedUserByEmail(email);
+    return suspended
+      ? AuthError.accountSuspended()
+      : AuthError.invalidCredentials();
+  }
+
   async sendOtp(email: string): Promise<{ message: string }> {
     const user = await authRepository.findUserByEmail(email);
-    if (!user || user.status !== UserStatus.ACTIVE) {
-      throw AuthError.invalidCredentials();
+    if (!user) {
+      throw await this.noActiveAccountError(email);
+    }
+    if (user.status !== UserStatus.ACTIVE) {
+      throw AuthError.accountSuspended();
     }
 
     const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
@@ -117,8 +139,11 @@ export class AuthService {
     ipAddress?: string,
   ): Promise<AuthResponse> {
     const user = await authRepository.findUserByEmail(email);
-    if (!user || user.status !== UserStatus.ACTIVE) {
-      throw AuthError.invalidCredentials();
+    if (!user) {
+      throw await this.noActiveAccountError(email);
+    }
+    if (user.status !== UserStatus.ACTIVE) {
+      throw AuthError.accountSuspended();
     }
 
     const otp = await authRepository.findLatestOtp(user.id, OtpType.EMAIL_LOGIN);
@@ -156,6 +181,7 @@ export class AuthService {
     if (!refreshedUser) {
       throw AuthError.invalidCredentials();
     }
+    await licensingService.assertOrganizationCanLogin(refreshedUser.id);
 
     const tokenPayload = {
       userId: refreshedUser.id,
@@ -192,7 +218,10 @@ export class AuthService {
     ipAddress?: string,
   ): Promise<AuthResponse> {
     const user = await authRepository.findUserByEmail(email);
-    if (!user || !user.passwordHash) {
+    if (!user) {
+      throw await this.noActiveAccountError(email);
+    }
+    if (!user.passwordHash) {
       throw AuthError.invalidCredentials();
     }
 
@@ -206,8 +235,9 @@ export class AuthService {
     }
 
     if (user.status !== UserStatus.ACTIVE) {
-      throw AuthError.unauthorized();
+      throw AuthError.accountSuspended();
     }
+    await licensingService.assertOrganizationCanLogin(user.id);
 
     await authRepository.updateUser(user.id, {
       lastLoginAt: new Date(),
@@ -254,13 +284,13 @@ export class AuthService {
 
     let user = await authRepository.findUserByGoogleId(googleUser.sub);
     if (user && user.status !== UserStatus.ACTIVE) {
-      throw AuthError.invalidCredentials();
+      throw AuthError.accountSuspended();
     }
 
     if (!user) {
       const existingUser = await authRepository.findUserByEmail(googleEmail);
       if (existingUser && existingUser.status !== UserStatus.ACTIVE) {
-        throw AuthError.invalidCredentials();
+        throw AuthError.accountSuspended();
       }
 
       if (existingUser) {
@@ -272,20 +302,7 @@ export class AuthService {
           name: existingUser.name ?? googleUser.name,
         });
       } else {
-        user = await authRepository.createUser({
-          avatar: googleUser.picture ?? undefined,
-          email: googleEmail,
-          googleId: googleUser.sub,
-          isEmailVerified: true,
-          lastLoginAt: now,
-          name: googleUser.name,
-          role: UserRole.STUDENT,
-        });
-        await sendWelcomeEmail({
-          to: user.email,
-          name: user.name,
-          role: user.role,
-        });
+        throw await this.noActiveAccountError(googleEmail);
       }
     } else {
       user = await authRepository.updateUser(user.id, {
@@ -316,6 +333,7 @@ export class AuthService {
     if (!safeUser) {
       throw AuthError.invalidCredentials();
     }
+    await licensingService.assertOrganizationCanLogin(user.id);
 
     return {
       tokens,
@@ -541,6 +559,7 @@ export class AuthService {
       if (!user || user.status !== UserStatus.ACTIVE) {
         throw AuthError.invalidCredentials();
       }
+      await licensingService.assertOrganizationCanLogin(user.id);
 
       await authRepository.deleteSession(session.id);
 
@@ -584,8 +603,257 @@ export class AuthService {
     }
   }
 
+  async validatePasswordSetupToken(token: string): Promise<{
+    email: string;
+    name: string | null;
+    role: UserRole;
+    hasPassword: boolean;
+  }> {
+    const { otpId, secret } = this.parsePasswordSetupToken(token);
+    const otp = await authRepository.findOtpById(otpId);
+    if (
+      !otp ||
+      otp.type !== OtpType.PASSWORD_RESET ||
+      otp.usedAt ||
+      new Date() > otp.expiresAt
+    ) {
+      throw new AppError('Password setup link is invalid or expired', 400);
+    }
+
+    if (!otp.user || otp.user.deletedAt || otp.user.status !== UserStatus.ACTIVE) {
+      throw new AppError('Password setup account is not active', 400);
+    }
+    if (!ADMIN_LOGIN_ROLES.includes(otp.user.role)) {
+      throw new AppError('Password setup is only available for admin accounts', 403);
+    }
+
+    const matches = await bcrypt.compare(secret, otp.code);
+    if (!matches) {
+      throw new AppError('Password setup link is invalid or expired', 400);
+    }
+
+    return {
+      email: otp.user.email,
+      name: otp.user.name,
+      role: otp.user.role,
+      hasPassword: otp.user.passwordHash != null,
+    };
+  }
+
+  async completePasswordSetup(
+    input: {
+      token: string;
+      password: string;
+    },
+    ipAddress?: string,
+  ): Promise<{ email: string; message: string }> {
+    const { otpId } = this.parsePasswordSetupToken(input.token);
+    const setup = await this.validatePasswordSetupToken(input.token);
+    const passwordHash = await bcrypt.hash(input.password, 10);
+    const otp = await authRepository.findOtpById(otpId);
+    if (!otp) {
+      throw new AppError('Password setup link is invalid or expired', 400);
+    }
+
+    await authRepository.updateUser(otp.userId, {
+      passwordHash,
+      isEmailVerified: true,
+    });
+    await authRepository.markOtpUsed(otp.id);
+    await authRepository.deleteAllUserSessions(otp.userId);
+
+    try {
+      await writeAuditLog({
+        actorUserId: otp.userId,
+        action: 'auth.password.complete',
+        targetType: 'user',
+        targetId: otp.userId,
+        summary: 'Admin completed password setup',
+        ip: ipAddress,
+      });
+    } catch {
+      // Never block the request on audit failure.
+    }
+
+    try {
+      await sendPasswordChangedEmail({
+        to: setup.email,
+        name: setup.name,
+      });
+    } catch {
+      // Fire-and-forget — email failure must not break password setup.
+    }
+
+    return {
+      email: setup.email,
+      message: 'Password set successfully',
+    };
+  }
+
+  /**
+   * Change the password for an already-authenticated admin. Verifies the
+   * current password, persists the new hash, sends a confirmation email, and
+   * invalidates other sessions. When the caller's current refresh token is
+   * provided it is preserved so the active session stays valid.
+   */
+  async changePassword(
+    userId: string,
+    currentPassword: string,
+    newPassword: string,
+    options?: { ipAddress?: string; keepRefreshToken?: string | null },
+  ): Promise<{ message: string }> {
+    const user = await authRepository.findUserById(userId);
+    if (!user) {
+      throw AuthError.invalidCredentials();
+    }
+    if (!user.passwordHash) {
+      throw new AppError('Current password is incorrect', 400);
+    }
+
+    const matches = await bcrypt.compare(currentPassword, user.passwordHash);
+    if (!matches) {
+      throw new AppError('Current password is incorrect', 400);
+    }
+
+    const passwordHash = await bcrypt.hash(newPassword, 10);
+    await authRepository.updateUser(user.id, { passwordHash });
+
+    // Invalidate other sessions; keep the caller's current session when we can
+    // identify it from the supplied refresh token.
+    const keepRefreshToken = options?.keepRefreshToken?.trim();
+    if (keepRefreshToken) {
+      await authRepository.deleteOtherUserSessions(user.id, keepRefreshToken);
+    } else {
+      await authRepository.deleteAllUserSessions(user.id);
+    }
+
+    try {
+      await writeAuditLog({
+        actorUserId: user.id,
+        action: 'auth.password.change',
+        targetType: 'user',
+        targetId: user.id,
+        summary: 'Admin changed password',
+        ip: options?.ipAddress,
+      });
+    } catch {
+      // Never block the request on audit failure.
+    }
+
+    try {
+      await sendPasswordChangedEmail({
+        to: user.email,
+        name: user.name,
+      });
+    } catch {
+      // Fire-and-forget — email failure must not break the password change.
+    }
+
+    return { message: 'Password changed successfully' };
+  }
+
   async resendOtp(email: string): Promise<{ message: string }> {
     return this.sendOtp(email);
+  }
+
+  /**
+   * Request a password reset email. Always returns success — never reveals
+   * whether the email is registered (prevents enumeration). Only sends an
+   * actual email when the user exists, is active, and has an admin role.
+   */
+  async requestPasswordReset(
+    email: string,
+    ipAddress?: string,
+  ): Promise<{ message: string }> {
+    const genericMessage =
+      'If the email matches an admin account, a password reset link has been sent.';
+    const normalizedEmail = email.trim().toLowerCase();
+    if (!normalizedEmail) {
+      return { message: genericMessage };
+    }
+
+    const user = await authRepository.findUserByEmail(normalizedEmail);
+    if (
+      !user ||
+      user.deletedAt ||
+      user.status !== UserStatus.ACTIVE ||
+      !ADMIN_LOGIN_ROLES.includes(user.role)
+    ) {
+      return { message: genericMessage };
+    }
+
+    try {
+      await writeAuditLog({
+        actorUserId: user.id,
+        action: 'auth.password_reset.request',
+        targetType: 'user',
+        targetId: user.id,
+        summary: 'Admin requested a password reset',
+        ip: ipAddress,
+      });
+    } catch {
+      // Never block the request on audit failure.
+    }
+
+    const token = await this.createPasswordResetToken(user.id);
+    const resetUrl = this.passwordResetUrl(token);
+    await sendPasswordResetEmail({
+      to: user.email,
+      name: user.name,
+      role: user.role,
+      resetUrl,
+      expiresInLabel: `${PASSWORD_RESET_EXPIRY_HOURS} hours`,
+    });
+
+    return { message: genericMessage };
+  }
+
+  private async createPasswordResetToken(userId: string): Promise<string> {
+    // Invalidate any outstanding setup/reset tokens for this user so only the
+    // newest link works.
+    await prisma.otp.updateMany({
+      where: { userId, type: OtpType.PASSWORD_RESET, usedAt: null },
+      data: { usedAt: new Date() },
+    });
+
+    const secret = randomBytes(32).toString('hex');
+    const otp = await prisma.otp.create({
+      data: {
+        userId,
+        type: OtpType.PASSWORD_RESET,
+        code: await bcrypt.hash(secret, 10),
+        expiresAt: new Date(
+          Date.now() + PASSWORD_RESET_EXPIRY_HOURS * 60 * 60 * 1000,
+        ),
+      },
+    });
+    return `${otp.id}.${secret}`;
+  }
+
+  private passwordResetUrl(token: string): string {
+    const baseUrl = (env.PUBLIC_ADMIN_URL || env.PUBLIC_APP_URL).replace(/\/+$/, '');
+    return `${baseUrl}/setup-password?token=${encodeURIComponent(token)}&mode=reset`;
+  }
+
+  /**
+   * Human-readable expiry label for password setup links, derived from the
+   * canonical TTL constant so copy stays in sync with the actual token TTL.
+   */
+  get passwordSetupExpiryLabel(): string {
+    const days: number = PASSWORD_SETUP_EXPIRY_DAYS;
+    return `${days} day${days === 1 ? '' : 's'}`;
+  }
+
+  private parsePasswordSetupToken(token: string): {
+    otpId: string;
+    secret: string;
+  } {
+    const [otpId, secret, ...rest] = token.trim().split('.');
+    if (!otpId || !secret || rest.length > 0) {
+      throw new AppError('Password setup link is invalid or expired', 400);
+    }
+
+    return { otpId, secret };
   }
 
   private get fixedOtpCode(): string | null {

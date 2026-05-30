@@ -107,6 +107,24 @@ export class LiveSessionController {
     }
   }
 
+  async verifySessionOnlyJoinCode(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const result = await liveSessionService.verifySessionOnlyJoinCode(req.body.code);
+      ApiResponse.success(res, result, 'Session-only code verified');
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async joinSessionOnlyByCode(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const result = await liveSessionService.joinSessionOnlyByCode(req.body);
+      ApiResponse.created(res, result, 'Joined session-only live session');
+    } catch (error) {
+      next(error);
+    }
+  }
+
   async listMessages(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const messages = await liveSessionService.listMessages(req.user!, req.params.id);

@@ -23,6 +23,12 @@ jest.mock('@/modules/users/user-context.service', () => ({
   findUserContextById: jest.fn(),
 }));
 
+jest.mock('@/modules/licensing/licensing.service', () => ({
+  licensingService: {
+    assertOrganizationCanLogin: jest.fn(),
+  },
+}));
+
 jest.mock('@/shared/utils/jwt', () => ({
   generateTokenPair: jest.fn(),
   verifyRefreshToken: jest.fn(),
@@ -143,58 +149,18 @@ describe('AuthService Google Sign-In', () => {
     expect(mockedSendWelcomeEmail).not.toHaveBeenCalled();
   });
 
-  it('creates a new active student when the Google account email is not invited', async () => {
+  it('rejects a Google account email that was not invited/provisioned', async () => {
     mockedAuthRepository.findUserByGoogleId.mockResolvedValue(null);
     mockedAuthRepository.findUserByEmail.mockResolvedValue(null);
-    mockedAuthRepository.createUser.mockResolvedValue({
-      id: 'student-1',
-      email: 'teacher@softlogicwhiteboard.com',
-      name: 'Teacher Demo',
-      avatar: 'https://example.com/avatar.png',
-      googleId: 'google-sub-1',
-      isEmailVerified: true,
-      role: UserRole.STUDENT,
-      status: UserStatus.ACTIVE,
-      timezone: 'UTC',
-      language: 'en',
-      invitedAt: new Date('2026-01-01T00:00:00.000Z'),
-      createdAt: new Date('2026-01-01T00:00:00.000Z'),
-      updatedAt: new Date('2026-01-01T00:00:00.000Z'),
-      deletedAt: null,
-      lastLoginAt: new Date(),
-      primaryOrganizationId: null,
-    } as any);
-    mockedFindUserContextById.mockResolvedValue({
-      ...safeUserContext,
-      id: 'student-1',
-      role: UserRole.STUDENT,
-    } as any);
 
-    const result = await authService.googleSignIn('google-id-token');
+    await expect(authService.googleSignIn('google-id-token')).rejects.toMatchObject({
+      message: 'Invalid credentials',
+      statusCode: 401,
+    });
 
-    expect(result.user.role).toBe(UserRole.STUDENT);
-    expect(mockedAuthRepository.createUser).toHaveBeenCalledWith(
-      expect.objectContaining({
-        email: 'teacher@softlogicwhiteboard.com',
-        googleId: 'google-sub-1',
-        isEmailVerified: true,
-        role: UserRole.STUDENT,
-      }),
-    );
-    expect(mockedAuthRepository.createSession).toHaveBeenCalledWith(
-      expect.objectContaining({
-        userId: 'student-1',
-        refreshToken: 'refresh-token',
-      }),
-    );
-    expect(mockedSendWelcomeEmail).toHaveBeenCalledTimes(1);
-    expect(mockedSendWelcomeEmail).toHaveBeenCalledWith(
-      expect.objectContaining({
-        to: 'teacher@softlogicwhiteboard.com',
-        name: 'Teacher Demo',
-        role: UserRole.STUDENT,
-      }),
-    );
+    expect(mockedAuthRepository.createUser).not.toHaveBeenCalled();
+    expect(mockedAuthRepository.createSession).not.toHaveBeenCalled();
+    expect(mockedSendWelcomeEmail).not.toHaveBeenCalled();
   });
 
   it('rejects sign-in for a disabled invited email account', async () => {

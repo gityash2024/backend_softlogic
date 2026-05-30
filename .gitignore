@@ -140,3 +140,11 @@ vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vercel
 .env*.local
+
+temp.production.env
+
+*.env
+
+temp.production.env
+
+*.env

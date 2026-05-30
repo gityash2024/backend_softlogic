@@ -15,5 +15,11 @@
       "source": "/(.*)",
       "destination": "/api/index.js"
     }
+  ],
+  "crons": [
+    {
+      "path": "/api/v1/admin/jobs/subscription-sweep",
+      "schedule": "0 6 * * *"
+    }
   ]
 }
