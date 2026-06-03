@@ -1,4 +1,5 @@
 import multer from 'multer';
+import { Request, Response, NextFunction } from 'express';
 import { AppError } from '@/shared/errors/AppError';
 import { isAllowedImageType } from '@/shared/utils/file';
 import path from 'path';
@@ -46,8 +47,8 @@ export const uploadMultiple = (fieldName: string, maxCount = 5) =>
     },
   }).array(fieldName, maxCount);
 
-export const uploadDocumentSingle = (fieldName: string) =>
-  multer({
+export const uploadDocumentSingle = (fieldName: string) => {
+  const upload = multer({
     storage,
     limits: { fileSize: MAX_DOCUMENT_FILE_SIZE },
     fileFilter: (_req, file, cb) => {
@@ -63,6 +64,17 @@ export const uploadDocumentSingle = (fieldName: string) =>
       }
     },
   }).single(fieldName);
+
+  return (req: Request, res: Response, next: NextFunction) => {
+    upload(req, res, (error) => {
+      if (error instanceof multer.MulterError && error.code === 'LIMIT_FILE_SIZE') {
+        next(new AppError('Document imports support files up to 50 MB.', 413));
+        return;
+      }
+      next(error);
+    });
+  };
+};
 
 export const uploadLiveSessionFileSingle = (fieldName: string) =>
   multer({

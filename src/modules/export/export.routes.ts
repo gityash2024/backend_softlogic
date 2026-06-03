@@ -6,6 +6,8 @@ import { uploadDocumentSingle } from '@/shared/middleware/upload.middleware';
 const router = Router();
 router.use(authMiddleware);
 
+router.post('/import/upload-intent', exportController.createImportUploadIntent);
+router.post('/import/convert-remote', exportController.convertRemoteImportDocument);
 router.post(
   '/import/convert',
   uploadDocumentSingle('document'),

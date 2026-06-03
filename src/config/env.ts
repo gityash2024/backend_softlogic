@@ -96,10 +96,19 @@ const envSchema = z.object({
   STORAGE_ACCESS_KEY_ID: optionalString,
   STORAGE_SECRET_ACCESS_KEY: optionalString,
   STORAGE_PUBLIC_BASE_URL: optionalUrl,
+  MINIO_ENDPOINT: optionalString,
+  MINIO_PORT: optionalString,
+  MINIO_ACCESS_KEY: optionalString,
+  MINIO_SECRET_KEY: optionalString,
+  MINIO_BUCKET: optionalString,
+  MINIO_REGION: optionalString,
+  MINIO_PUBLIC_BASE_URL: optionalUrl,
 
   // Whiteboard document import conversion
   IMPORT_CONVERSION_WORKER_URL: optionalUrl,
   IMPORT_CONVERSION_WORKER_TOKEN: optionalString,
+  CONVERTAPI_TOKEN: optionalString,
+  CONVERTAPI_BASE_URL: z.string().url().default('https://v2.convertapi.com'),
 
   // Storage
   STORAGE_TYPE: z.enum(['minio', 's3', 'cloudinary']).default('cloudinary'),

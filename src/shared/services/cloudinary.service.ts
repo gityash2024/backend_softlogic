@@ -1,4 +1,5 @@
 import path from 'path';
+import { randomUUID } from 'crypto';
 import { v2 as cloudinary } from 'cloudinary';
 
 import { env } from '@/config';
@@ -41,6 +42,15 @@ export interface UploadedImageAsset {
   publicId: string;
 }
 
+export interface SignedRawUploadIntent {
+  uploadUrl: string;
+  publicId: string;
+  expiresAt: string;
+  fields: Record<string, string>;
+}
+
+const DOCUMENT_IMPORT_FOLDER = 'softlogic/imports';
+
 export const uploadImageBuffer = async ({
   buffer,
   filename,
@@ -80,6 +90,72 @@ export const uploadImageBuffer = async ({
   });
 };
 
+export const createSignedRawUploadIntent = ({
+  filename,
+  userId,
+}: {
+  filename: string;
+  userId: string;
+}): SignedRawUploadIntent => {
+  ensureConfigured();
+
+  const extension = path.extname(filename).toLowerCase();
+  const basename =
+    sanitizePublicId(path.basename(filename, extension)) || 'document';
+  const safeUserId = sanitizePublicId(userId) || 'user';
+  const publicId = `${DOCUMENT_IMPORT_FOLDER}/${safeUserId}/${Date.now()}-${randomUUID()}-${basename}${extension}`;
+  const timestamp = Math.floor(Date.now() / 1000).toString();
+  const fieldsToSign = {
+    overwrite: 'true',
+    public_id: publicId,
+    timestamp,
+  };
+  const signature = cloudinary.utils.api_sign_request(
+    fieldsToSign,
+    env.CLOUDINARY_API_SECRET!,
+  );
+
+  return {
+    uploadUrl: `https://api.cloudinary.com/v1_1/${env.CLOUDINARY_CLOUD_NAME}/raw/upload`,
+    publicId,
+    expiresAt: new Date((Number(timestamp) + 10 * 60) * 1000).toISOString(),
+    fields: {
+      ...fieldsToSign,
+      api_key: env.CLOUDINARY_API_KEY!,
+      signature,
+    },
+  };
+};
+
+export const isExpectedImportRawAsset = ({
+  fileUrl,
+  publicId,
+}: {
+  fileUrl: string;
+  publicId?: string | null;
+}): boolean => {
+  if (!env.CLOUDINARY_CLOUD_NAME) {
+    return false;
+  }
+
+  let url: URL;
+  try {
+    url = new URL(fileUrl);
+  } catch {
+    return false;
+  }
+
+  const expectedPathPrefix = `/${env.CLOUDINARY_CLOUD_NAME}/raw/upload/`;
+  const expectedPublicIdPrefix = `${DOCUMENT_IMPORT_FOLDER}/`;
+  return (
+    url.protocol === 'https:' &&
+    url.hostname === 'res.cloudinary.com' &&
+    url.pathname.startsWith(expectedPathPrefix) &&
+    url.pathname.includes(`/${expectedPublicIdPrefix}`) &&
+    (!publicId || publicId.startsWith(expectedPublicIdPrefix))
+  );
+};
+
 export const deleteImageAsset = async (
   publicId: string | null | undefined,
 ): Promise<void> => {
@@ -89,4 +165,18 @@ export const deleteImageAsset = async (
 
   ensureConfigured();
   await cloudinary.uploader.destroy(publicId, { resource_type: 'image' });
+};
+
+export const deleteRawAsset = async (
+  publicId: string | null | undefined,
+): Promise<void> => {
+  if (!publicId) {
+    return;
+  }
+
+  ensureConfigured();
+  await cloudinary.uploader.destroy(publicId, {
+    resource_type: 'raw',
+    invalidate: true,
+  });
 };
