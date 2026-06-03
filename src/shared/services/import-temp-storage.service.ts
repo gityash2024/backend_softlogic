@@ -72,6 +72,19 @@ const isLoopbackEndpoint = (endpoint: string): boolean => {
   }
 };
 
+const shouldForcePathStyle = (endpoint: string | undefined): boolean => {
+  if (!endpoint) {
+    return false;
+  }
+
+  try {
+    const host = new URL(endpoint).hostname.toLowerCase();
+    return !/(^|\.)s3[.-][a-z0-9-]+\.amazonaws\.com$/.test(host);
+  } catch {
+    return true;
+  }
+};
+
 const objectStorageConfig = (): ObjectStorageConfig | null => {
   const bucket = env.STORAGE_BUCKET ?? env.MINIO_BUCKET;
   const accessKeyId = env.STORAGE_ACCESS_KEY_ID ?? env.MINIO_ACCESS_KEY;
@@ -100,6 +113,7 @@ export const isImportObjectStorageConfigured = (): boolean =>
 const getClient = (config: ObjectStorageConfig): S3Client => {
   const signature = JSON.stringify({
     endpoint: config.endpoint,
+    forcePathStyle: shouldForcePathStyle(config.endpoint),
     region: config.region,
     accessKeyId: config.accessKeyId,
   });
@@ -112,7 +126,7 @@ const getClient = (config: ObjectStorageConfig): S3Client => {
   client = new S3Client({
     region: config.region,
     endpoint: config.endpoint,
-    forcePathStyle: Boolean(config.endpoint),
+    forcePathStyle: shouldForcePathStyle(config.endpoint),
     credentials: {
       accessKeyId: config.accessKeyId,
       secretAccessKey: config.secretAccessKey,
