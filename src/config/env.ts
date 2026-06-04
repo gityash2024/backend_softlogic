@@ -3,6 +3,11 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
+if (!process.env.DATABASE_URL?.trim()) {
+  process.env.DATABASE_URL =
+    process.env.POSTGRES_PRISMA_URL ?? process.env.POSTGRES_URL;
+}
+
 const optionalString = z.preprocess(
   (value) => (value === '' ? undefined : value),
   z.string().optional(),

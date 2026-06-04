@@ -24,6 +24,7 @@ export const errorMiddleware = (
       success: false,
       data: null,
       message: err.message,
+      ...(err.code ? { code: err.code } : {}),
     });
     return;
   }

@@ -32,13 +32,21 @@ describe('ExportController import upload intent', () => {
     jest.restoreAllMocks();
   });
 
-  it('accepts PowerPoint files at the 50 MB limit', async () => {
+  it.each([
+    ['deck.pptx', 'pptx'],
+    ['legacy.ppt', 'ppt'],
+    ['document.pdf', 'pdf'],
+  ])('accepts %s files at the 50 MB limit', async (sourceName, sourceExtension) => {
     const req = {
       body: {
-        sourceName: 'deck.pptx',
-        sourceExtension: 'pptx',
+        sourceName,
+        sourceExtension,
         mimeType:
-          'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+          sourceExtension === 'pdf'
+            ? 'application/pdf'
+            : sourceExtension === 'ppt'
+              ? 'application/vnd.ms-powerpoint'
+              : 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
         sizeBytes: 50 * 1024 * 1024,
       },
       user: { userId: 'user-1' },
@@ -84,8 +92,9 @@ describe('ExportController import upload intent', () => {
 
     expect(next).toHaveBeenCalledWith(
       expect.objectContaining({
-        message: 'PowerPoint imports support files up to 50 MB.',
+        message: 'File size should not be more than 50 MB.',
         statusCode: 413,
+        code: 'IMPORT_FILE_TOO_LARGE',
       }),
     );
   });
@@ -110,7 +119,61 @@ describe('ExportController import upload intent', () => {
 
     expect(next).toHaveBeenCalledWith(
       expect.objectContaining({
-        message: 'Only PowerPoint files can use remote import upload.',
+        message: 'Only PDF and PowerPoint files can use remote import upload.',
+        statusCode: 400,
+        code: 'IMPORT_UNSUPPORTED_TYPE',
+      }),
+    );
+  });
+
+  it('rejects empty files before creating an upload intent', async () => {
+    const req = {
+      body: {
+        sourceName: 'document.pdf',
+        sourceExtension: 'pdf',
+        sizeBytes: 0,
+      },
+      user: { userId: 'user-1' },
+    };
+    const res = makeResponse();
+    const next = jest.fn();
+
+    await exportController.createImportUploadIntent(
+      req as never,
+      res as never,
+      next,
+    );
+
+    expect(next).toHaveBeenCalledWith(
+      expect.objectContaining({
+        code: 'IMPORT_EMPTY_FILE',
+        statusCode: 400,
+      }),
+    );
+  });
+
+  it('rejects a MIME type that does not match the extension', async () => {
+    const req = {
+      body: {
+        sourceName: 'document.pdf',
+        sourceExtension: 'pdf',
+        mimeType: 'image/png',
+        sizeBytes: 1024,
+      },
+      user: { userId: 'user-1' },
+    };
+    const res = makeResponse();
+    const next = jest.fn();
+
+    await exportController.createImportUploadIntent(
+      req as never,
+      res as never,
+      next,
+    );
+
+    expect(next).toHaveBeenCalledWith(
+      expect.objectContaining({
+        code: 'IMPORT_UNSUPPORTED_TYPE',
         statusCode: 400,
       }),
     );

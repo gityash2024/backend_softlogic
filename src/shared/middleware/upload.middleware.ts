@@ -9,16 +9,11 @@ const MAX_DOCUMENT_FILE_SIZE = 50 * 1024 * 1024; // 50MB
 const MAX_LIVE_SESSION_FILE_SIZE = 250 * 1024 * 1024; // 250MB
 
 const storage = multer.memoryStorage();
-const documentMimeTypes = new Set<string>([
-  'application/pdf',
-  'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-  'application/vnd.ms-powerpoint',
-]);
 const documentExtensions = new Set<string>(['.pdf', '.pptx', '.ppt']);
 
 const isAllowedDocumentImportType = (file: Express.Multer.File): boolean => {
   const extension = path.extname(file.originalname).toLowerCase();
-  return documentMimeTypes.has(file.mimetype) || documentExtensions.has(extension);
+  return documentExtensions.has(extension);
 };
 
 export const uploadSingle = (fieldName: string) =>
@@ -68,7 +63,14 @@ export const uploadDocumentSingle = (fieldName: string) => {
   return (req: Request, res: Response, next: NextFunction) => {
     upload(req, res, (error) => {
       if (error instanceof multer.MulterError && error.code === 'LIMIT_FILE_SIZE') {
-        next(new AppError('Document imports support files up to 50 MB.', 413));
+        next(
+          new AppError(
+            'File size should not be more than 50 MB.',
+            413,
+            true,
+            'IMPORT_FILE_TOO_LARGE',
+          ),
+        );
         return;
       }
       next(error);

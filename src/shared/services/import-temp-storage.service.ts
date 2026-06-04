@@ -3,6 +3,7 @@ import { randomUUID } from 'crypto';
 import {
   DeleteObjectCommand,
   GetObjectCommand,
+  HeadObjectCommand,
   PutObjectCommand,
   S3Client,
 } from '@aws-sdk/client-s3';
@@ -211,6 +212,39 @@ export const createSignedImportObjectReadUrl = async (
   return getSignedUrl(getClient(config) as never, command, {
     expiresIn: SIGNED_READ_EXPIRES_SECONDS,
   });
+};
+
+export const getImportObjectMetadata = async (
+  storageKey: string,
+): Promise<{ sizeBytes: number; contentType: string }> => {
+  const config = requireConfig();
+  const response = await getClient(config).send(
+    new HeadObjectCommand({
+      Bucket: config.bucket,
+      Key: storageKey,
+    }),
+  );
+  return {
+    sizeBytes: Number(response.ContentLength ?? 0),
+    contentType: response.ContentType?.trim() ?? '',
+  };
+};
+
+export const getImportObjectPrefix = async (
+  storageKey: string,
+): Promise<Buffer> => {
+  const config = requireConfig();
+  const response = await getClient(config).send(
+    new GetObjectCommand({
+      Bucket: config.bucket,
+      Key: storageKey,
+      Range: 'bytes=0-15',
+    }),
+  );
+  if (!response.Body) {
+    return Buffer.alloc(0);
+  }
+  return Buffer.from(await response.Body.transformToByteArray());
 };
 
 export const deleteImportObject = async (

@@ -67,7 +67,7 @@ const getImportMetadata = (body: Request['body']): Record<string, string> => {
   );
 };
 
-const normalizePowerPointImportRequest = (body: Request['body']) => {
+const normalizeDocumentImportRequest = (body: Request['body']) => {
   const sourceName =
     typeof body.sourceName === 'string' ? body.sourceName.trim() : '';
   const sourceExtension =
@@ -82,14 +82,42 @@ const normalizePowerPointImportRequest = (body: Request['body']) => {
   if (!sourceName) {
     throw new AppError('Source name is required.', 400);
   }
-  if (extension !== 'ppt' && extension !== 'pptx') {
-    throw new AppError('Only PowerPoint files can use remote import upload.', 400);
+  if (extension !== 'pdf' && extension !== 'ppt' && extension !== 'pptx') {
+    throw new AppError(
+      'Only PDF and PowerPoint files can use remote import upload.',
+      400,
+      true,
+      'IMPORT_UNSUPPORTED_TYPE',
+    );
   }
   if (!Number.isFinite(sizeBytes) || sizeBytes <= 0) {
-    throw new AppError('Source file size is required.', 400);
+    throw new AppError('The selected file is empty.', 400, true, 'IMPORT_EMPTY_FILE');
   }
   if (sizeBytes > MAX_DOCUMENT_IMPORT_BYTES) {
-    throw new AppError('PowerPoint imports support files up to 50 MB.', 413);
+    throw new AppError(
+      'File size should not be more than 50 MB.',
+      413,
+      true,
+      'IMPORT_FILE_TOO_LARGE',
+    );
+  }
+  const normalizedMimeType = mimeType.toLowerCase();
+  const mimeMatches =
+    !normalizedMimeType ||
+    normalizedMimeType === 'application/octet-stream' ||
+    (extension === 'pdf' && normalizedMimeType === 'application/pdf') ||
+    (extension === 'ppt' &&
+      normalizedMimeType === 'application/vnd.ms-powerpoint') ||
+    (extension === 'pptx' &&
+      normalizedMimeType ===
+        'application/vnd.openxmlformats-officedocument.presentationml.presentation');
+  if (!mimeMatches) {
+    throw new AppError(
+      'The document MIME type does not match its file type.',
+      400,
+      true,
+      'IMPORT_UNSUPPORTED_TYPE',
+    );
   }
 
   return {
@@ -110,7 +138,7 @@ export class ExportController {
     next: NextFunction,
   ): Promise<void> {
     try {
-      const input = normalizePowerPointImportRequest(req.body);
+      const input = normalizeDocumentImportRequest(req.body);
       const intent = isImportObjectStorageConfigured()
         ? await createSignedImportObjectUploadIntent({
             filename: input.sourceName,
@@ -141,6 +169,7 @@ export class ExportController {
     res: Response,
     next: NextFunction,
   ): Promise<void> {
+    const startedAt = Date.now();
     try {
       if (!req.file) {
         throw new AppError('Document file is required.', 400);
@@ -159,9 +188,20 @@ export class ExportController {
         mimeType: req.file.mimetype,
         metadata: getImportMetadata(req.body),
       });
+      logger.info('import.convert-multipart.complete', {
+        format: result.format,
+        sizeBytes: req.file.size,
+        pageCount: result.pages.length,
+        durationMs: Date.now() - startedAt,
+      });
 
       ApiResponse.success(res, result, 'Document import converted');
     } catch (error) {
+      logger.warn('import.convert-multipart.failed', {
+        durationMs: Date.now() - startedAt,
+        failureCode: error instanceof AppError ? error.code : undefined,
+        error: error instanceof Error ? error.message : String(error),
+      });
       next(error);
     }
   }
@@ -171,17 +211,26 @@ export class ExportController {
     res: Response,
     next: NextFunction,
   ): Promise<void> {
+    const startedAt = Date.now();
     const publicId =
       typeof req.body.publicId === 'string' ? req.body.publicId.trim() : '';
     const storageKey =
       typeof req.body.storageKey === 'string' ? req.body.storageKey.trim() : '';
+    let requestedType = '';
+    let sourceName = '';
+    const requestedSizeBytes = Number(req.body.sizeBytes);
     try {
-      const requestedType =
+      requestedType =
         typeof req.body.type === 'string' ? req.body.type.trim().toLowerCase() : '';
-      if (requestedType !== 'ppt' && requestedType !== 'pptx') {
-        throw new AppError('Import type must be either ppt or pptx.', 400);
+      if (requestedType !== 'pdf' && requestedType !== 'ppt' && requestedType !== 'pptx') {
+        throw new AppError(
+          'Import type must be pdf, ppt, or pptx.',
+          400,
+          true,
+          'IMPORT_UNSUPPORTED_TYPE',
+        );
       }
-      const sourceName =
+      sourceName =
         typeof req.body.sourceName === 'string' ? req.body.sourceName.trim() : '';
       const fileUrl =
         typeof req.body.fileUrl === 'string' ? req.body.fileUrl.trim() : '';
@@ -194,6 +243,10 @@ export class ExportController {
 
       logger.info('import.convert-remote.start', {
         requestedType,
+        sourceName,
+        sizeBytes: Number.isFinite(requestedSizeBytes)
+          ? requestedSizeBytes
+          : undefined,
         publicIdPrefix: publicId ? publicIdPrefix(publicId) : '',
         storageKeyPrefix: storageKey ? publicIdPrefix(storageKey) : '',
       });
@@ -208,12 +261,28 @@ export class ExportController {
       logger.info('import.convert-remote.complete', {
         format: result.format,
         pageCount: result.pages.length,
+        sizeBytes: Number.isFinite(requestedSizeBytes)
+          ? requestedSizeBytes
+          : undefined,
+        durationMs: Date.now() - startedAt,
         publicIdPrefix: publicId ? publicIdPrefix(publicId) : '',
         storageKeyPrefix: storageKey ? publicIdPrefix(storageKey) : '',
       });
 
       ApiResponse.success(res, result, 'Document import converted');
     } catch (error) {
+      logger.warn('import.convert-remote.failed', {
+        requestedType,
+        sourceName,
+        sizeBytes: Number.isFinite(requestedSizeBytes)
+          ? requestedSizeBytes
+          : undefined,
+        durationMs: Date.now() - startedAt,
+        failureCode: error instanceof AppError ? error.code : undefined,
+        error: error instanceof Error ? error.message : String(error),
+        publicIdPrefix: publicId ? publicIdPrefix(publicId) : '',
+        storageKeyPrefix: storageKey ? publicIdPrefix(storageKey) : '',
+      });
       next(error);
     } finally {
       if (storageKey) {

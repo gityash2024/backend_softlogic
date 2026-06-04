@@ -6,10 +6,30 @@ import { PNG } from 'pngjs';
 import { isExpectedImportRawAsset } from '@/shared/services/cloudinary.service';
 import {
   createSignedImportObjectReadUrl,
+  getImportObjectMetadata,
+  getImportObjectPrefix,
   isExpectedImportObjectKey,
+  MAX_DOCUMENT_IMPORT_BYTES,
 } from '@/shared/services/import-temp-storage.service';
 
 type ImportConversionType = 'pdf' | 'ppt' | 'pptx';
+type ImportErrorCode =
+  | 'IMPORT_FILE_TOO_LARGE'
+  | 'IMPORT_EMPTY_FILE'
+  | 'IMPORT_UNSUPPORTED_TYPE'
+  | 'IMPORT_CORRUPT_DOCUMENT'
+  | 'IMPORT_PASSWORD_PROTECTED'
+  | 'IMPORT_NETWORK_FAILURE'
+  | 'IMPORT_CONVERSION_TIMEOUT'
+  | 'IMPORT_CONVERSION_FAILED';
+
+const CONVERSION_TIMEOUT_MS = 240_000;
+
+const importError = (
+  message: string,
+  statusCode: number,
+  code: ImportErrorCode,
+): AppError => new AppError(message, statusCode, true, code);
 
 interface ConvertDocumentInput {
   requestedType: ImportConversionType;
@@ -38,6 +58,7 @@ class ImportConversionService {
     input: ConvertDocumentInput,
   ): Promise<ConvertedImportPayload> {
     this.ensureSupportedInput(input);
+    this.ensureDocumentBytes(input);
 
     if (env.IMPORT_CONVERSION_WORKER_URL) {
       return this.convertWithWorker(input);
@@ -68,9 +89,6 @@ class ImportConversionService {
       mimeType: '',
     });
 
-    if (this.toWorkerType(input.requestedType) !== 'ppt') {
-      throw new AppError('Only PowerPoint files can be imported from remote URLs.', 400);
-    }
     if (!env.CONVERTAPI_TOKEN) {
       throw new AppError('Document import conversion is not configured yet.', 503);
     }
@@ -88,6 +106,22 @@ class ImportConversionService {
         throw new AppError('Remote import storage key is not trusted.', 400);
       }
       fileUrl = await createSignedImportObjectReadUrl(storageKey);
+      const metadata = await getImportObjectMetadata(storageKey);
+      if (metadata.sizeBytes <= 0) {
+        throw importError('The selected file is empty.', 400, 'IMPORT_EMPTY_FILE');
+      }
+      if (metadata.sizeBytes > MAX_DOCUMENT_IMPORT_BYTES) {
+        throw importError(
+          'File size should not be more than 50 MB.',
+          413,
+          'IMPORT_FILE_TOO_LARGE',
+        );
+      }
+      this.ensureDocumentMimeType(input.fileName, metadata.contentType);
+      this.ensureDocumentSignature(
+        input.fileName,
+        await getImportObjectPrefix(storageKey),
+      );
     } else if (
       !fileUrl ||
       !isExpectedImportRawAsset({
@@ -98,7 +132,7 @@ class ImportConversionService {
       throw new AppError('Remote import file URL is not trusted.', 400);
     }
 
-    return this.convertPowerPointUrlWithConvertApi({
+    return this.convertDocumentUrlWithConvertApi({
       requestedType: input.requestedType,
       fileName: input.fileName,
       fileUrl,
@@ -128,7 +162,7 @@ class ImportConversionService {
       input.fileName,
     );
 
-    const response = await fetch(workerUrl, {
+    const response = await this.fetchConversion(workerUrl, {
       method: 'POST',
       headers: env.IMPORT_CONVERSION_WORKER_TOKEN
         ? {
@@ -146,7 +180,7 @@ class ImportConversionService {
       | null;
 
     if (!response.ok) {
-      throw new AppError(
+      throw this.providerError(
         payload?.message ?? 'Unable to convert import document.',
         response.status || 502,
       );
@@ -170,7 +204,7 @@ class ImportConversionService {
     form.append('StoreFile', 'false');
     form.append('PageRange', '1-2000');
 
-    const response = await fetch(endpoint, {
+    const response = await this.fetchConversion(endpoint, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${env.CONVERTAPI_TOKEN}`,
@@ -191,7 +225,7 @@ class ImportConversionService {
       | null;
 
     if (!response.ok) {
-      throw new AppError(
+      throw this.providerError(
         payload?.Message ?? payload?.message ?? 'Unable to convert PowerPoint import document.',
         response.status || 502,
       );
@@ -200,7 +234,7 @@ class ImportConversionService {
     return this.normalizeConvertApiPayload(payload, input);
   }
 
-  private async convertPowerPointUrlWithConvertApi(input: {
+  private async convertDocumentUrlWithConvertApi(input: {
     requestedType: ImportConversionType;
     fileName: string;
     fileUrl: string;
@@ -221,7 +255,7 @@ class ImportConversionService {
       ],
     };
 
-    const response = await fetch(endpoint, {
+    const response = await this.fetchConversion(endpoint, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${env.CONVERTAPI_TOKEN}`,
@@ -244,8 +278,8 @@ class ImportConversionService {
       | null;
 
     if (!response.ok) {
-      throw new AppError(
-        payload?.Message ?? payload?.message ?? 'Unable to convert PowerPoint import document.',
+      throw this.providerError(
+        payload?.Message ?? payload?.message ?? 'Unable to convert import document.',
         response.status || 502,
       );
     }
@@ -263,14 +297,121 @@ class ImportConversionService {
 
     if (this.toWorkerType(input.requestedType) === 'pdf') {
       if (extension !== '.pdf') {
-        throw new AppError('Only PDF files can be imported as PDF.', 400);
+        throw importError(
+          'Only PDF files can be imported as PDF.',
+          400,
+          'IMPORT_UNSUPPORTED_TYPE',
+        );
       }
       return;
     }
 
     if (extension !== '.ppt' && extension !== '.pptx') {
-      throw new AppError('Only PowerPoint files can be imported as PPT.', 400);
+      throw importError(
+        'Only PowerPoint files can be imported as PPT.',
+        400,
+        'IMPORT_UNSUPPORTED_TYPE',
+      );
     }
+  }
+
+  private ensureDocumentBytes(input: ConvertDocumentInput): void {
+    if (input.fileBuffer.length === 0) {
+      throw importError('The selected file is empty.', 400, 'IMPORT_EMPTY_FILE');
+    }
+    if (input.fileBuffer.length > MAX_DOCUMENT_IMPORT_BYTES) {
+      throw importError(
+        'File size should not be more than 50 MB.',
+        413,
+        'IMPORT_FILE_TOO_LARGE',
+      );
+    }
+    this.ensureDocumentMimeType(input.fileName, input.mimeType);
+    this.ensureDocumentSignature(input.fileName, input.fileBuffer);
+  }
+
+  private ensureDocumentMimeType(fileName: string, mimeType: string): void {
+    const normalized = mimeType.trim().toLowerCase();
+    if (!normalized || normalized === 'application/octet-stream') {
+      return;
+    }
+    const extension = path.extname(fileName).toLowerCase();
+    const isExpected =
+      (extension === '.pdf' && normalized === 'application/pdf') ||
+      (extension === '.ppt' &&
+        normalized === 'application/vnd.ms-powerpoint') ||
+      (extension === '.pptx' &&
+        normalized ===
+          'application/vnd.openxmlformats-officedocument.presentationml.presentation');
+    if (!isExpected) {
+      throw importError(
+        'The document MIME type does not match its file type.',
+        400,
+        'IMPORT_UNSUPPORTED_TYPE',
+      );
+    }
+  }
+
+  private ensureDocumentSignature(fileName: string, bytes: Buffer): void {
+    const extension = path.extname(fileName).toLowerCase();
+    const isPdf = extension === '.pdf' && bytes.subarray(0, 5).toString('ascii') === '%PDF-';
+    const isPptx =
+      extension === '.pptx' && bytes[0] === 0x50 && bytes[1] === 0x4b;
+    const oleHeader = Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]);
+    const isPpt = extension === '.ppt' && bytes.subarray(0, 8).equals(oleHeader);
+    if (!isPdf && !isPptx && !isPpt) {
+      throw importError(
+        'The document is corrupted or does not match its file type.',
+        400,
+        'IMPORT_CORRUPT_DOCUMENT',
+      );
+    }
+  }
+
+  private async fetchConversion(url: string, init: RequestInit): Promise<Response> {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), CONVERSION_TIMEOUT_MS);
+    try {
+      return await fetch(url, { ...init, signal: controller.signal });
+    } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') {
+        throw importError(
+          'Document conversion timed out. Please try again.',
+          504,
+          'IMPORT_CONVERSION_TIMEOUT',
+        );
+      }
+      throw importError(
+        'Unable to reach the document conversion service.',
+        502,
+        'IMPORT_NETWORK_FAILURE',
+      );
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  private providerError(message: string, statusCode: number): AppError {
+    const normalized = message.toLowerCase();
+    if (normalized.includes('password') || normalized.includes('encrypted')) {
+      return importError(
+        'Password-protected documents are not supported.',
+        400,
+        'IMPORT_PASSWORD_PROTECTED',
+      );
+    }
+    if (
+      normalized.includes('corrupt') ||
+      normalized.includes('invalid') ||
+      normalized.includes('damaged')
+    ) {
+      return importError(
+        'The document is corrupted or invalid.',
+        400,
+        'IMPORT_CORRUPT_DOCUMENT',
+      );
+    }
+    return importError(message, statusCode, 'IMPORT_CONVERSION_FAILED');
   }
 
   private normalizeWorkerPayload(
@@ -278,23 +419,39 @@ class ImportConversionService {
     input: ConvertDocumentInput,
   ): ConvertedImportPayload {
     if (!payload || typeof payload !== 'object') {
-      throw new AppError('Import conversion worker returned an invalid payload.', 502);
+      throw importError(
+        'Import conversion worker returned an invalid payload.',
+        502,
+        'IMPORT_CONVERSION_FAILED',
+      );
     }
 
     const record = payload as Record<string, unknown>;
     const rawPages = Array.isArray(record.pages) ? record.pages : null;
     if (!rawPages || rawPages.length == 0) {
-      throw new AppError('Import conversion worker did not return any pages.', 502);
+      throw importError(
+        'Import conversion worker did not return any pages.',
+        502,
+        'IMPORT_CONVERSION_FAILED',
+      );
     }
 
     const pages = rawPages.map((page, index) => {
       if (!page || typeof page !== 'object') {
-        throw new AppError('Import conversion worker returned an invalid page.', 502);
+        throw importError(
+          'Import conversion worker returned an invalid page.',
+          502,
+          'IMPORT_CONVERSION_FAILED',
+        );
       }
       const pageRecord = page as Record<string, unknown>;
       const imageBase64 = `${pageRecord.imageBase64 ?? ''}`.trim();
       if (imageBase64.length === 0) {
-        throw new AppError('Import conversion worker returned an empty slide image.', 502);
+        throw importError(
+          'Import conversion worker returned an empty slide image.',
+          502,
+          'IMPORT_CONVERSION_FAILED',
+        );
       }
       const name = `${pageRecord.name ?? ''}`.trim();
 
@@ -318,24 +475,40 @@ class ImportConversionService {
     input: ConvertDocumentInput,
   ): ConvertedImportPayload {
     if (!payload || typeof payload !== 'object') {
-      throw new AppError('ConvertAPI returned an invalid payload.', 502);
+      throw importError(
+        'ConvertAPI returned an invalid payload.',
+        502,
+        'IMPORT_CONVERSION_FAILED',
+      );
     }
 
     const record = payload as Record<string, unknown>;
     const rawFiles = Array.isArray(record.Files) ? record.Files : null;
     if (!rawFiles || rawFiles.length === 0) {
-      throw new AppError('ConvertAPI did not return any slides.', 502);
+      throw importError(
+        'ConvertAPI did not return any pages.',
+        502,
+        'IMPORT_CONVERSION_FAILED',
+      );
     }
 
     const pages = rawFiles.map((file, index) => {
       if (!file || typeof file !== 'object') {
-        throw new AppError('ConvertAPI returned an invalid slide.', 502);
+        throw importError(
+          'ConvertAPI returned an invalid page.',
+          502,
+          'IMPORT_CONVERSION_FAILED',
+        );
       }
       const fileRecord = file as Record<string, unknown>;
       const imageBase64 = `${fileRecord.FileData ?? ''}`.trim();
       const imageUrl = `${fileRecord.Url ?? fileRecord.FileUrl ?? ''}`.trim();
       if (imageBase64.length === 0 && imageUrl.length === 0) {
-        throw new AppError('ConvertAPI returned an empty slide image.', 502);
+        throw importError(
+          'ConvertAPI returned an empty page image.',
+          502,
+          'IMPORT_CONVERSION_FAILED',
+        );
       }
       const dimensions = imageBase64.length > 0
         ? this.readPngDimensions(imageBase64)

@@ -2,6 +2,23 @@ import { env } from '@/config';
 import { AppError } from '@/shared/errors/AppError';
 import { importConversionService } from '@/modules/export/import-conversion.service';
 
+jest.mock('@/shared/services/import-temp-storage.service', () => {
+  const actual = jest.requireActual(
+    '@/shared/services/import-temp-storage.service',
+  );
+  return {
+    ...actual,
+    getImportObjectMetadata: jest.fn(async () => ({
+      sizeBytes: 1024,
+      contentType:
+        'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    })),
+    getImportObjectPrefix: jest.fn(async () =>
+      Buffer.from([0x50, 0x4b, 0x03, 0x04]),
+    ),
+  };
+});
+
 describe('ImportConversionService', () => {
   const originalWorkerUrl = env.IMPORT_CONVERSION_WORKER_URL;
   const originalWorkerToken = env.IMPORT_CONVERSION_WORKER_TOKEN;
@@ -14,6 +31,11 @@ describe('ImportConversionService', () => {
   const originalStorageSecretAccessKey = env.STORAGE_SECRET_ACCESS_KEY;
   const tinyPngBase64 =
     'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lK3QkwAAAABJRU5ErkJggg==';
+  const pdfBytes = Buffer.from('%PDF-1.7\n');
+  const pptxBytes = Buffer.from([0x50, 0x4b, 0x03, 0x04]);
+  const pptBytes = Buffer.from([
+    0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1,
+  ]);
 
   beforeEach(() => {
     env.IMPORT_CONVERSION_WORKER_URL = 'https://worker.example/convert';
@@ -38,7 +60,7 @@ describe('ImportConversionService', () => {
     env.STORAGE_ENDPOINT = originalStorageEndpoint;
     env.STORAGE_ACCESS_KEY_ID = originalStorageAccessKeyId;
     env.STORAGE_SECRET_ACCESS_KEY = originalStorageSecretAccessKey;
-    jest.resetAllMocks();
+    jest.clearAllMocks();
   });
 
   it('returns ordered converted PDF page assets from the worker', async () => {
@@ -67,7 +89,7 @@ describe('ImportConversionService', () => {
 
     const result = await importConversionService.convertDocument({
       requestedType: 'pdf',
-      fileBuffer: Buffer.from('pdf'),
+      fileBuffer: pdfBytes,
       fileName: 'demo.pdf',
       mimeType: 'application/pdf',
     });
@@ -99,7 +121,7 @@ describe('ImportConversionService', () => {
 
     const result = await importConversionService.convertDocument({
       requestedType: 'ppt',
-      fileBuffer: Buffer.from('ppt'),
+      fileBuffer: pptBytes,
       fileName: 'legacy.ppt',
       mimeType: 'application/vnd.ms-powerpoint',
       metadata: {
@@ -140,7 +162,7 @@ describe('ImportConversionService', () => {
 
     const result = await importConversionService.convertDocument({
       requestedType: 'pptx',
-      fileBuffer: Buffer.from('pptx'),
+      fileBuffer: pptxBytes,
       fileName: 'deck.pptx',
       mimeType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
       metadata: {
@@ -172,7 +194,7 @@ describe('ImportConversionService', () => {
 
     const result = await importConversionService.convertDocument({
       requestedType: 'ppt',
-      fileBuffer: Buffer.from('pptx'),
+      fileBuffer: pptxBytes,
       fileName: 'deck.pptx',
       mimeType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
       metadata: {
@@ -216,7 +238,7 @@ describe('ImportConversionService', () => {
 
     const result = await importConversionService.convertDocument({
       requestedType: 'ppt',
-      fileBuffer: Buffer.from('ppt'),
+      fileBuffer: pptBytes,
       fileName: 'legacy.ppt',
       mimeType: 'application/vnd.ms-powerpoint',
     });
@@ -279,6 +301,36 @@ describe('ImportConversionService', () => {
       imageUrl: 'https://v2.convertapi.com/d/result-1/deck-1.png',
     });
     expect(result.pages[0]?.imageBase64).toBeUndefined();
+  });
+
+  it('uses ConvertAPI URL input for remote PDF imports', async () => {
+    env.CONVERTAPI_TOKEN = 'convertapi-token';
+
+    (global.fetch as jest.Mock).mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        Files: [
+          {
+            FileName: 'document-1.png',
+            Url: 'https://v2.convertapi.com/d/result-1/document-1.png',
+          },
+        ],
+      }),
+    });
+
+    const result = await importConversionService.convertRemoteDocument({
+      requestedType: 'pdf',
+      fileName: 'document.pdf',
+      fileUrl:
+        'https://res.cloudinary.com/demo-cloud/raw/upload/v1/softlogic/imports/user/document.pdf',
+      publicId: 'softlogic/imports/user/document.pdf',
+    });
+
+    expect((global.fetch as jest.Mock).mock.calls[0]?.[0]).toBe(
+      'https://v2.convertapi.com/convert/pdf/to/png',
+    );
+    expect(result.format).toBe('PDF');
+    expect(result.pages).toHaveLength(1);
   });
 
   it('uses a presigned object URL for remote PPTX imports by storage key', async () => {
@@ -373,7 +425,7 @@ describe('ImportConversionService', () => {
     try {
       await importConversionService.convertDocument({
         requestedType: 'pdf',
-        fileBuffer: Buffer.from('pdf'),
+        fileBuffer: pdfBytes,
         fileName: 'demo.pdf',
         mimeType: 'application/pdf',
       });
@@ -397,7 +449,7 @@ describe('ImportConversionService', () => {
     try {
       await importConversionService.convertDocument({
         requestedType: 'ppt',
-        fileBuffer: Buffer.from('pptx'),
+        fileBuffer: pptxBytes,
         fileName: 'deck.pptx',
         mimeType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
       });
@@ -410,6 +462,24 @@ describe('ImportConversionService', () => {
       'Document import conversion is not configured yet.',
     );
     expect((thrown as AppError).statusCode).toBe(503);
+    expect(global.fetch).not.toHaveBeenCalled();
+  });
+
+  it('rejects a document whose bytes do not match its extension', async () => {
+    let thrown: unknown;
+    try {
+      await importConversionService.convertDocument({
+        requestedType: 'pdf',
+        fileBuffer: pptxBytes,
+        fileName: 'document.pdf',
+        mimeType: 'application/pdf',
+      });
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(AppError);
+    expect((thrown as AppError).code).toBe('IMPORT_CORRUPT_DOCUMENT');
     expect(global.fetch).not.toHaveBeenCalled();
   });
 });
