@@ -12,8 +12,10 @@ const uploadLimiter = rateLimit({
   legacyHeaders: false,
 });
 
-router.use(authMiddleware);
+router.get('/object/*', mediaController.readObject);
 
+router.use(authMiddleware);
+router.post('/upload-intent', uploadLimiter, mediaController.createUploadIntent);
 router.post('/upload', uploadLimiter, uploadLiveSessionFileSingle('file'), mediaController.upload);
 
 export const mediaRoutes = router;
