@@ -1,5 +1,25 @@
+import { ContentImportStatus, UserRole } from '@prisma/client';
 import { env } from '@/config';
+import { prisma } from '@/config';
 import { exportController } from '@/modules/export/export.controller';
+
+jest.mock('@/config', () => {
+  const actual = jest.requireActual('@/config');
+  return {
+    ...actual,
+    prisma: {
+      contentImport: {
+        create: jest.fn(),
+      },
+    },
+  };
+});
+
+const mockedPrisma = prisma as unknown as {
+  contentImport: {
+    create: jest.Mock;
+  };
+};
 
 const makeResponse = () => {
   const response = {
@@ -22,6 +42,7 @@ describe('ExportController import upload intent', () => {
     env.STORAGE_ENDPOINT = 'https://storage.example.com';
     env.STORAGE_ACCESS_KEY_ID = 'storage-key';
     env.STORAGE_SECRET_ACCESS_KEY = 'storage-secret';
+    mockedPrisma.contentImport.create.mockResolvedValue({ id: 'import-1' });
   });
 
   afterEach(() => {
@@ -49,7 +70,11 @@ describe('ExportController import upload intent', () => {
               : 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
         sizeBytes: 50 * 1024 * 1024,
       },
-      user: { userId: 'user-1' },
+      user: {
+        userId: 'user-1',
+        role: UserRole.TEACHER,
+        organizationId: 'org-1',
+      },
     };
     const res = makeResponse();
     const next = jest.fn();
@@ -66,6 +91,18 @@ describe('ExportController import upload intent', () => {
       provider: 's3',
       method: 'PUT',
       maxSizeBytes: 50 * 1024 * 1024,
+      importRecordId: 'import-1',
+    });
+    expect(mockedPrisma.contentImport.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        userId: 'user-1',
+        userRole: UserRole.TEACHER,
+        organizationId: 'org-1',
+        sourceName,
+        storageKey: expect.stringContaining('imports/org-1/teacher/user-1/'),
+        publicUrl: expect.any(String),
+        status: ContentImportStatus.PENDING,
+      }),
     });
     expect(res.json.mock.calls[0]?.[0].data.uploadUrl).not.toContain(
       'storage-secret',

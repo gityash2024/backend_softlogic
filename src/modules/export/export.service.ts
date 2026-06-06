@@ -143,6 +143,8 @@ export class ExportService {
         data: {
           status: ExportStatus.COMPLETED,
           fileUrl: artifact.filePath,
+          fileName: path.basename(artifact.filePath),
+          mimeType: this.getMimeType(options.format),
           fileSize: artifact.fileSize,
           completedAt: new Date(),
           error: null,

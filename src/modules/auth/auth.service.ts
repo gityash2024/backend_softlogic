@@ -774,14 +774,15 @@ export class AuthService {
           clientSessionId,
         )
       : null;
-    const session = clientSession ?? tokenSession;
 
     if (tokenSession && tokenSession.userId !== userId) {
       throw AuthError.tokenInvalid();
     }
-    if (session?.revokedAt || tokenSession?.revokedAt) {
+    if (tokenSession?.revokedAt) {
       throw AuthError.tokenInvalid();
     }
+
+    const session = clientSession ?? tokenSession;
 
     if (tokenSession && clientSession && tokenSession.id !== clientSession.id) {
       await authRepository.deleteSession(tokenSession.id);

@@ -252,6 +252,24 @@ export class AdminController {
     }
   }
 
+  async deleteSubscription(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const subscription = await adminService.deleteSubscription(req.user!, req.params.id);
+      ApiResponse.success(res, subscription, 'Subscription archived');
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async restoreSubscription(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const subscription = await adminService.restoreSubscription(req.user!, req.params.id);
+      ApiResponse.success(res, subscription, 'Subscription restored');
+    } catch (error) {
+      next(error);
+    }
+  }
+
   async renewSubscription(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const subscription = await adminService.renewSubscription(req.user!, req.params.id, req.body);
@@ -381,6 +399,30 @@ export class AdminController {
         res,
         await adminService.resetHardwareActivation(req.user!, req.params.id),
         'Hardware activation reset',
+      );
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async revokeHardwareActivationKey(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      ApiResponse.success(
+        res,
+        await adminService.revokeHardwareActivationKey(req.user!, req.params.id),
+        'Hardware activation key revoked',
+      );
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async replaceHardwareActivationKey(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      ApiResponse.created(
+        res,
+        await adminService.replaceHardwareActivationKey(req.user!, req.params.id),
+        'Hardware activation key replaced',
       );
     } catch (error) {
       next(error);
@@ -550,6 +592,30 @@ export class AdminController {
   async exportContentExports(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       sendExport(res, await adminService.exportContentExports(req.user!, req.query as never));
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async listContentImports(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      sendPaginated(res, await adminService.listContentImports(req.user!, req.query as never));
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async getContentImport(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      ApiResponse.success(res, await adminService.getContentImport(req.user!, req.params.id));
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async exportContentImports(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      sendExport(res, await adminService.exportContentImports(req.user!, req.query as never));
     } catch (error) {
       next(error);
     }

@@ -1,5 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
-import { ExportFormat, ExportStatus } from '@prisma/client';
+import { ContentImportStatus, ExportFormat, ExportStatus } from '@prisma/client';
 import { prisma } from '@/config';
 import { ApiResponse } from '@/shared/utils/api-response';
 import { AppError } from '@/shared/errors/AppError';
@@ -18,7 +18,6 @@ import {
 } from '@/shared/services/cloudinary.service';
 import {
   createSignedImportObjectUploadIntent,
-  deleteImportObject,
   isImportObjectStorageConfigured,
   MAX_DOCUMENT_IMPORT_BYTES,
 } from '@/shared/services/import-temp-storage.service';
@@ -26,6 +25,32 @@ import {
 type ExportQualityInput = 'LOW' | 'MEDIUM' | 'HIGH';
 type ExportResolutionInput = 'STANDARD' | 'HD' | 'ULTRA';
 const MAX_CLIENT_EXPORT_BYTES = 500 * 1024 * 1024;
+
+const sanitizeKeyPart = (value: string | null | undefined): string =>
+  (value ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, '-')
+    .replace(/-{2,}/g, '-')
+    .replace(/^-+|-+$/g, '');
+
+const contentStoragePrefix = ({
+  root,
+  organizationId,
+  role,
+  userId,
+}: {
+  root: 'exports' | 'imports';
+  organizationId?: string | null;
+  role?: string | null;
+  userId: string;
+}): string =>
+  [
+    root,
+    sanitizeKeyPart(organizationId) || 'no-org',
+    sanitizeKeyPart(role) || 'role',
+    sanitizeKeyPart(userId) || 'user',
+  ].join('/');
 
 const normalizeExportQuality = (value: unknown): ExportQualityInput => {
   if (typeof value !== 'string') {
@@ -177,8 +202,19 @@ export class ExportController {
         throw new AppError('Export file size is too large', 413);
       }
 
+      const requestedCanvasId =
+        typeof req.body.canvasId === 'string' ? req.body.canvasId.trim() : '';
+      const organizationId = requestedCanvasId
+        ? (await ensureCanvasAccess(requestedCanvasId, req.user!)).organizationId
+        : req.user!.organizationId;
+
       const intent = await fileStorageService.createSignedUploadIntent({
-        prefix: `exports/${req.user!.userId}`,
+        prefix: contentStoragePrefix({
+          root: 'exports',
+          organizationId,
+          role: req.user!.role,
+          userId: req.user!.userId,
+        }),
         fileName,
         mimeType,
         maxSizeBytes: MAX_CLIENT_EXPORT_BYTES,
@@ -208,6 +244,16 @@ export class ExportController {
         typeof req.body.storageKey === 'string' ? req.body.storageKey.trim() : '';
       const suppliedUrl =
         typeof req.body.fileUrl === 'string' ? req.body.fileUrl.trim() : '';
+      const fileName =
+        typeof req.body.fileName === 'string' && req.body.fileName.trim()
+          ? req.body.fileName.trim()
+          : storageKey
+            ? path.basename(storageKey)
+            : null;
+      const mimeType =
+        typeof req.body.mimeType === 'string' && req.body.mimeType.trim()
+          ? req.body.mimeType.trim()
+          : exportService.getMimeType(format);
       const fileUrl = suppliedUrl || (storageKey ? fileStorageService.publicUrlFor(storageKey) : '');
       const fileSize = Number(req.body.fileSize);
 
@@ -222,6 +268,9 @@ export class ExportController {
           format,
           status,
           fileUrl: fileUrl || null,
+          storageKey: storageKey || null,
+          mimeType,
+          fileName,
           fileSize: Number.isFinite(fileSize) && fileSize > 0 ? Math.floor(fileSize) : null,
           completedAt: status === ExportStatus.COMPLETED ? new Date() : null,
         },
@@ -261,16 +310,37 @@ export class ExportController {
   ): Promise<void> {
     try {
       const input = normalizeDocumentImportRequest(req.body);
-      const intent = isImportObjectStorageConfigured()
+      const useObjectStorage = isImportObjectStorageConfigured();
+      const intent = useObjectStorage
         ? await createSignedImportObjectUploadIntent({
             filename: input.sourceName,
             mimeType: input.mimeType,
             userId: req.user!.userId,
+            userRole: req.user!.role,
+            organizationId: req.user!.organizationId,
           })
         : createSignedRawUploadIntent({
             filename: input.sourceName,
             userId: req.user!.userId,
           });
+      let importRecordId: string | null = null;
+      if (useObjectStorage && 'storageKey' in intent) {
+        const importRecord = await prisma.contentImport.create({
+          data: {
+            userId: req.user!.userId,
+            userRole: req.user!.role,
+            organizationId: req.user!.organizationId ?? null,
+            sourceName: input.sourceName,
+            mimeType: input.mimeType || null,
+            sizeBytes: Math.floor(input.sizeBytes),
+            storageKey: intent.storageKey,
+            publicUrl: fileStorageService.publicUrlFor(intent.storageKey),
+            status: ContentImportStatus.PENDING,
+            metadata: getImportMetadata(req.body),
+          },
+        });
+        importRecordId = importRecord.id;
+      }
       logger.info('import.upload-intent.created', {
         provider: 'provider' in intent ? intent.provider : 'cloudinary',
         sourceExtension: input.sourceExtension,
@@ -280,7 +350,11 @@ export class ExportController {
           'storageKey' in intent ? publicIdPrefix(intent.storageKey) : '',
       });
 
-      ApiResponse.success(res, intent, 'Document import upload intent created');
+      ApiResponse.success(
+        res,
+        importRecordId ? { ...intent, importRecordId } : intent,
+        'Document import upload intent created',
+      );
     } catch (error) {
       next(error);
     }
@@ -372,6 +446,15 @@ export class ExportController {
         publicIdPrefix: publicId ? publicIdPrefix(publicId) : '',
         storageKeyPrefix: storageKey ? publicIdPrefix(storageKey) : '',
       });
+      if (storageKey) {
+        await prisma.contentImport.updateMany({
+          where: { storageKey, userId: req.user!.userId },
+          data: {
+            status: ContentImportStatus.PROCESSING,
+            error: null,
+          },
+        });
+      }
       const result = await importConversionService.convertRemoteDocument({
         requestedType,
         fileName: sourceName,
@@ -390,9 +473,28 @@ export class ExportController {
         publicIdPrefix: publicId ? publicIdPrefix(publicId) : '',
         storageKeyPrefix: storageKey ? publicIdPrefix(storageKey) : '',
       });
+      if (storageKey) {
+        await prisma.contentImport.updateMany({
+          where: { storageKey, userId: req.user!.userId },
+          data: {
+            status: ContentImportStatus.CONVERTED,
+            convertedAt: new Date(),
+            error: null,
+          },
+        });
+      }
 
       ApiResponse.success(res, result, 'Document import converted');
     } catch (error) {
+      if (storageKey) {
+        await prisma.contentImport.updateMany({
+          where: { storageKey, userId: req.user!.userId },
+          data: {
+            status: ContentImportStatus.FAILED,
+            error: error instanceof Error ? error.message : String(error),
+          },
+        });
+      }
       logger.warn('import.convert-remote.failed', {
         requestedType,
         sourceName,
@@ -407,22 +509,7 @@ export class ExportController {
       });
       next(error);
     } finally {
-      if (storageKey) {
-        try {
-          await deleteImportObject(storageKey);
-          logger.info('import.object-cleanup.complete', {
-            storageKeyPrefix: publicIdPrefix(storageKey),
-          });
-        } catch (cleanupError) {
-          logger.warn('import.object-cleanup.failed', {
-            storageKeyPrefix: publicIdPrefix(storageKey),
-            error:
-              cleanupError instanceof Error
-                ? cleanupError.message
-                : String(cleanupError),
-          });
-        }
-      } else if (publicId) {
+      if (!storageKey && publicId) {
         try {
           await deleteRawAsset(publicId);
           logger.info('import.raw-cleanup.complete', {

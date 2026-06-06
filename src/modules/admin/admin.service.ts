@@ -2,6 +2,7 @@ import {
   BrandingMode,
   AiCreditAccountStatus,
   CheckoutSessionStatus,
+  ContentImportStatus,
   ExportFormat,
   ExportStatus,
   HardwareActivationKeyStatus,
@@ -48,6 +49,7 @@ import type {
   ListActivityQuery,
   ListContentCanvasesQuery,
   ListContentExportsQuery,
+  ListContentImportsQuery,
   ListContentLiveSessionsQuery,
   ListOrganizationsQuery,
   ListSubscriptionsQuery,
@@ -154,7 +156,7 @@ interface CreateSubscriptionInput {
   status?: SubscriptionStatus;
   brandingMode?: BrandingMode;
   seatLimit: number;
-  seatUsage: number;
+  seatUsage?: number;
   startDate: Date;
   endDate?: Date | null;
 }
@@ -239,6 +241,13 @@ const EXPORT_STATUS_LABEL: Record<ExportStatus, string> = {
   [ExportStatus.PROCESSING]: 'Processing',
   [ExportStatus.COMPLETED]: 'Completed',
   [ExportStatus.FAILED]: 'Failed',
+};
+
+const CONTENT_IMPORT_STATUS_LABEL: Record<ContentImportStatus, string> = {
+  [ContentImportStatus.PENDING]: 'Pending',
+  [ContentImportStatus.PROCESSING]: 'Processing',
+  [ContentImportStatus.CONVERTED]: 'Converted',
+  [ContentImportStatus.FAILED]: 'Failed',
 };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -2158,6 +2167,7 @@ export class AdminService {
       SubscriptionStatus.EXPIRED,
       SubscriptionStatus.CANCELED,
     ]);
+    const wantsArchived = csvHasValue(query.status, 'ARCHIVED');
     if (query.search) {
       and.push({
         OR: [
@@ -2168,7 +2178,13 @@ export class AdminService {
         ],
       });
     }
-    if (statuses) and.push({ status: { in: statuses } });
+    if (wantsArchived) {
+      and.push({ deletedAt: { not: null } });
+      if (statuses) and.push({ status: { in: statuses } });
+    } else {
+      and.push({ deletedAt: null });
+      if (statuses) and.push({ status: { in: statuses } });
+    }
     if (query.planName) and.push({ planName: { contains: query.planName, mode: 'insensitive' } });
     if (query.organizationId) and.push({ organizationId: query.organizationId });
     if (query.userId) and.push({ userId: query.userId });
@@ -2268,8 +2284,8 @@ export class AdminService {
         { header: 'Scope Type', key: 'scopeType', width: 16, value: (row) => row.organizationId ? 'Organization' : 'User' },
         { header: 'Organization', key: 'organization', width: 28, value: (row) => row.organization?.name ?? '' },
         { header: 'User', key: 'user', width: 34, value: (row) => row.user?.email ?? row.user?.name ?? '' },
-        { header: 'Seat Usage', key: 'seatUsage', width: 14, value: (row) => row.seatUsage },
-        { header: 'Seat Limit', key: 'seatLimit', width: 14, value: (row) => row.seatLimit },
+        { header: 'Seats Used', key: 'seatUsage', width: 14, value: (row) => row.seatUsage },
+        { header: 'Number of Seats', key: 'seatLimit', width: 16, value: (row) => row.seatLimit },
         { header: 'Start Date', key: 'startDate', width: 22, value: (row) => row.startDate },
         { header: 'End Date', key: 'endDate', width: 22, value: (row) => row.endDate },
         { header: 'Created At', key: 'createdAt', width: 22, value: (row) => row.createdAt },
@@ -2312,15 +2328,12 @@ export class AdminService {
     // ignore client-sent seat usage (real usage is derived, never asserted).
     let status: SubscriptionStatus;
     let brandingMode: BrandingMode;
-    let seatUsage: number;
     if (isSuper) {
       status = input.status ?? SubscriptionStatus.ACTIVE;
       brandingMode = input.brandingMode ?? BrandingMode.SOFTLOGIC;
-      seatUsage = input.seatUsage;
     } else {
       status = SubscriptionStatus.PENDING_APPROVAL;
       brandingMode = BrandingMode.SOFTLOGIC;
-      seatUsage = 0;
       if (ownerOrganizationId) {
         const org = await prisma.organization.findUnique({
           where: { id: ownerOrganizationId },
@@ -2339,7 +2352,7 @@ export class AdminService {
         status,
         brandingMode,
         seatLimit: input.seatLimit,
-        seatUsage,
+        seatUsage: 0,
         startDate: input.startDate,
         endDate: input.endDate ?? null,
       },
@@ -2555,10 +2568,15 @@ export class AdminService {
       }
     }
 
+    if (input.seatLimit !== undefined) {
+      await licensingService.assertSubscriptionSeatCapacity(subscriptionId, input.seatLimit);
+    }
+
+    const { seatUsage: _ignoredSeatUsage, ...safeInput } = input;
     const subscription = await prisma.subscription.update({
       where: { id: subscriptionId },
       data: {
-        ...input,
+        ...safeInput,
       },
       include: {
         organization: true,
@@ -2577,6 +2595,69 @@ export class AdminService {
       await licensingService.recalculateLicenseUsage(subscription.organizationId);
     }
     await this.logAudit(actor.userId, 'subscription.update', 'subscription', subscription.id, `Updated subscription ${subscription.planName}`);
+    return subscription;
+  }
+
+  async deleteSubscription(actor: AuthenticatedUserLike, subscriptionId: string) {
+    await licensingService.requireSuperAdmin(actor);
+    const existing = await prisma.subscription.findUnique({
+      where: { id: subscriptionId },
+    });
+    if (!existing) throw new AppError('Subscription not found', 404);
+    if (existing.organizationId) {
+      await ensureOrganizationManaged(existing.organizationId, actor);
+    }
+    if (existing.deletedAt) return existing;
+
+    const subscription = await prisma.subscription.update({
+      where: { id: subscriptionId },
+      data: { deletedAt: new Date() },
+      include: {
+        organization: true,
+        user: { select: { id: true, email: true, name: true, role: true } },
+      },
+    });
+    if (subscription.organizationId) {
+      await licensingService.recalculateLicenseUsage(subscription.organizationId);
+    }
+    await this.logAudit(
+      actor.userId,
+      'subscription.archive',
+      'subscription',
+      subscription.id,
+      `Archived subscription ${subscription.planName}`,
+    );
+    return subscription;
+  }
+
+  async restoreSubscription(actor: AuthenticatedUserLike, subscriptionId: string) {
+    await licensingService.requireSuperAdmin(actor);
+    const existing = await prisma.subscription.findUnique({
+      where: { id: subscriptionId },
+    });
+    if (!existing) throw new AppError('Subscription not found', 404);
+    if (existing.organizationId) {
+      await ensureOrganizationManaged(existing.organizationId, actor);
+    }
+
+    const subscription = await prisma.subscription.update({
+      where: { id: subscriptionId },
+      data: { deletedAt: null },
+      include: {
+        organization: true,
+        user: { select: { id: true, email: true, name: true, role: true } },
+      },
+    });
+    if (subscription.organizationId) {
+      await licensingService.recalculateLicenseUsage(subscription.organizationId);
+    }
+    await this.logAudit(
+      actor.userId,
+      'subscription.restore',
+      'subscription',
+      subscription.id,
+      `Restored subscription ${subscription.planName}`,
+    );
     return subscription;
   }
 
@@ -2661,6 +2742,20 @@ export class AdminService {
     activationId: string,
   ) {
     return licensingService.resetHardwareActivation(actor, activationId);
+  }
+
+  async revokeHardwareActivationKey(
+    actor: AuthenticatedUserLike,
+    keyId: string,
+  ) {
+    return licensingService.revokeHardwareActivationKey(actor, keyId);
+  }
+
+  async replaceHardwareActivationKey(
+    actor: AuthenticatedUserLike,
+    keyId: string,
+  ) {
+    return licensingService.replaceHardwareActivationKey(actor, keyId);
   }
 
   async getSubscriptionDetails(
@@ -2884,6 +2979,7 @@ export class AdminService {
     }
     if (query.organizationId) and.push({ organizationId: query.organizationId });
     if (query.userId) and.push({ userId: query.userId });
+    if (query.role) and.push({ user: { role: query.role } });
     if (query.isPublic !== undefined) and.push({ isPublic: query.isPublic });
     if (query.hasThumbnail !== undefined) {
       and.push({ thumbnail: query.hasThumbnail ? { not: null } : null });
@@ -2913,6 +3009,7 @@ export class AdminService {
         include: {
           user: { select: { id: true, email: true, name: true, role: true } },
           organization: { select: { id: true, name: true, slug: true, kind: true, status: true, logoUrl: true, parentOrganizationId: true } },
+          slides: { orderBy: { order: 'asc' }, take: 1 },
           _count: { select: { slides: true, exports: true, liveSessions: true } },
         },
       }),
@@ -2992,6 +3089,7 @@ export class AdminService {
     if (statuses) and.push({ status: { in: statuses } });
     if (query.organizationId) and.push({ organizationId: query.organizationId });
     if (query.userId) and.push({ OR: [{ createdById: query.userId }, { hostUserId: query.userId }] });
+    if (query.role) and.push({ OR: [{ createdBy: { role: query.role } }, { host: { role: query.role } }] });
     if (query.canvasId) and.push({ canvasId: query.canvasId });
     const createdAt = dateRange(query.createdFrom, query.createdTo);
     if (createdAt) and.push({ createdAt });
@@ -3113,6 +3211,7 @@ export class AdminService {
     if (formats) and.push({ format: { in: formats } });
     if (query.organizationId) and.push({ canvas: { organizationId: query.organizationId } });
     if (query.userId) and.push({ userId: query.userId });
+    if (query.role) and.push({ user: { role: query.role } });
     if (query.canvasId) and.push({ canvasId: query.canvasId });
     const createdAt = dateRange(query.createdFrom, query.createdTo);
     if (createdAt) and.push({ createdAt });
@@ -3176,11 +3275,114 @@ export class AdminService {
         { header: 'Organization', key: 'organization', width: 28, value: (row) => row.canvas.organization?.name ?? '' },
         { header: 'Format', key: 'format', width: 12, value: (row) => row.format },
         { header: 'Status', key: 'status', width: 16, value: (row) => EXPORT_STATUS_LABEL[row.status] },
+        { header: 'Role', key: 'role', width: 18, value: (row) => ROLE_LABEL[row.user.role] },
+        { header: 'File Name', key: 'fileName', width: 34, value: (row) => row.fileName ?? '' },
+        { header: 'MIME Type', key: 'mimeType', width: 28, value: (row) => row.mimeType ?? '' },
+        { header: 'Storage Key', key: 'storageKey', width: 60, value: (row) => row.storageKey ?? '' },
         { header: 'File Size', key: 'fileSize', width: 14, value: (row) => row.fileSize ?? 0 },
         { header: 'File URL', key: 'fileUrl', width: 50, value: (row) => row.fileUrl ?? '' },
         { header: 'Error', key: 'error', width: 50, value: (row) => row.error ?? '' },
         { header: 'Created At', key: 'createdAt', width: 22, value: (row) => row.createdAt },
         { header: 'Completed At', key: 'completedAt', width: 22, value: (row) => row.completedAt },
+      ],
+    });
+  }
+
+  async listContentImports(
+    actor: AuthenticatedUserLike,
+    query: ListContentImportsQuery,
+    options: { exportAll?: boolean } = {},
+  ) {
+    const managedOrganizationIds = await getManagedOrganizationIds(actor);
+    const and: Prisma.ContentImportWhereInput[] = [
+      this.importScopeWhere(actor, managedOrganizationIds),
+    ];
+    if (query.search) {
+      and.push({
+        OR: [
+          { sourceName: { contains: query.search, mode: 'insensitive' } },
+          { mimeType: { contains: query.search, mode: 'insensitive' } },
+          { storageKey: { contains: query.search, mode: 'insensitive' } },
+          { publicUrl: { contains: query.search, mode: 'insensitive' } },
+          { user: { email: { contains: query.search, mode: 'insensitive' } } },
+          { user: { name: { contains: query.search, mode: 'insensitive' } } },
+          { organization: { name: { contains: query.search, mode: 'insensitive' } } },
+        ],
+      });
+    }
+    if (query.status) and.push({ status: query.status });
+    if (query.organizationId) and.push({ organizationId: query.organizationId });
+    if (query.userId) and.push({ userId: query.userId });
+    if (query.role) and.push({ userRole: query.role });
+    const createdAt = dateRange(query.createdFrom, query.createdTo);
+    if (createdAt) and.push({ createdAt });
+    const convertedAt = dateRange(query.convertedFrom, query.convertedTo);
+    if (convertedAt) and.push({ convertedAt });
+
+    const where: Prisma.ContentImportWhereInput = and.length === 1 ? and[0] : { AND: and };
+    const orderBy = this.orderBy<Prisma.ContentImportOrderByWithRelationInput>(
+      query.sortBy,
+      query.sortOrder,
+      ['createdAt', 'convertedAt', 'status', 'sourceName', 'sizeBytes'],
+      'createdAt',
+    );
+    const page = query.page;
+    const perPage = query.perPage;
+    const skip = options.exportAll ? undefined : (page - 1) * perPage;
+    const take = options.exportAll ? undefined : perPage;
+    const [items, total] = await Promise.all([
+      prisma.contentImport.findMany({
+        where,
+        orderBy,
+        skip,
+        take,
+        include: {
+          user: { select: { id: true, email: true, name: true, role: true } },
+          organization: { select: { id: true, name: true, slug: true, kind: true, status: true, logoUrl: true, parentOrganizationId: true } },
+        },
+      }),
+      prisma.contentImport.count({ where }),
+    ]);
+
+    return paginationMeta(items, total, page, options.exportAll ? total || perPage : perPage, nonEmptyFilters(query));
+  }
+
+  async getContentImport(actor: AuthenticatedUserLike, importId: string) {
+    const managedOrganizationIds = await getManagedOrganizationIds(actor);
+    const importRecord = await prisma.contentImport.findFirst({
+      where: {
+        AND: [this.importScopeWhere(actor, managedOrganizationIds), { id: importId }],
+      },
+      include: {
+        user: { select: { id: true, email: true, name: true, role: true } },
+        organization: true,
+      },
+    });
+    if (!importRecord) throw new AppError('Import not found', 404);
+    return importRecord;
+  }
+
+  async exportContentImports(actor: AuthenticatedUserLike, query: ListContentImportsQuery & { format: AdminExportFormat }) {
+    const result = await this.listContentImports(actor, query, { exportAll: true });
+    return buildAdminExport({
+      title: 'Content Imports',
+      fileBaseName: 'softlogic-content-imports',
+      format: query.format,
+      rows: result.items,
+      filters: result.filters,
+      columns: [
+        { header: 'Source Name', key: 'sourceName', width: 34, value: (row) => row.sourceName },
+        { header: 'User', key: 'user', width: 34, value: (row) => row.user.email },
+        { header: 'Role', key: 'role', width: 18, value: (row) => ROLE_LABEL[row.userRole] },
+        { header: 'Organization', key: 'organization', width: 28, value: (row) => row.organization?.name ?? '' },
+        { header: 'Status', key: 'status', width: 16, value: (row) => CONTENT_IMPORT_STATUS_LABEL[row.status] },
+        { header: 'MIME Type', key: 'mimeType', width: 28, value: (row) => row.mimeType ?? '' },
+        { header: 'File Size', key: 'sizeBytes', width: 14, value: (row) => row.sizeBytes ?? 0 },
+        { header: 'Storage Key', key: 'storageKey', width: 60, value: (row) => row.storageKey ?? '' },
+        { header: 'Public URL', key: 'publicUrl', width: 50, value: (row) => row.publicUrl ?? '' },
+        { header: 'Error', key: 'error', width: 50, value: (row) => row.error ?? '' },
+        { header: 'Created At', key: 'createdAt', width: 22, value: (row) => row.createdAt },
+        { header: 'Converted At', key: 'convertedAt', width: 22, value: (row) => row.convertedAt },
       ],
     });
   }
@@ -3497,6 +3699,27 @@ export class AdminService {
           ? [
               { user: { primaryOrganizationId: { in: managedOrganizationIds } } },
               { canvas: { organizationId: { in: managedOrganizationIds } } },
+            ]
+          : []),
+      ],
+    };
+  }
+
+  private importScopeWhere(
+    actor: AuthenticatedUserLike,
+    managedOrganizationIds: string[] | null,
+  ): Prisma.ContentImportWhereInput {
+    if (managedOrganizationIds === null) {
+      return {};
+    }
+
+    return {
+      OR: [
+        { userId: actor.userId },
+        ...(managedOrganizationIds.length > 0
+          ? [
+              { organizationId: { in: managedOrganizationIds } },
+              { user: { primaryOrganizationId: { in: managedOrganizationIds } } },
             ]
           : []),
       ],

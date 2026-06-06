@@ -132,6 +132,20 @@ export const createApp = (): express.Application => {
   app.use(`${apiPrefix}/simulations`, simulationsRoutes);
   app.use(`${apiPrefix}/marketplace`, marketplaceRoutes);
 
+  const adminRoot = path.resolve(process.cwd(), 'public', 'admin');
+  app.use(
+    '/admin',
+    express.static(adminRoot, {
+      dotfiles: 'deny',
+      fallthrough: true,
+      immutable: true,
+      maxAge: '1d',
+    }),
+  );
+  app.get(['/admin', '/admin/*'], (_req, res) => {
+    res.sendFile(path.join(adminRoot, 'index.html'));
+  });
+
   // ─── 404 Handler ──────────────────────────
   app.use('*', (_req, res) => {
     res.status(404).json({

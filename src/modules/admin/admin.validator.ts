@@ -1,6 +1,7 @@
 import {
   AiCreditScope,
   BrandingMode,
+  ContentImportStatus,
   OrganizationKind,
   OrganizationStatus,
   OrganizationStorageProvider,
@@ -129,7 +130,7 @@ export const createSubscriptionSchema = z.object({
   status: z.nativeEnum(SubscriptionStatus).optional(),
   brandingMode: z.nativeEnum(BrandingMode).optional(),
   seatLimit: z.coerce.number().int().min(1).default(1),
-  seatUsage: z.coerce.number().int().min(0).default(0),
+  seatUsage: z.coerce.number().int().min(0).optional(),
   startDate: z.coerce.date(),
   endDate: z.coerce.date().optional().nullable(),
 }).refine((value) => Boolean(value.organizationId || value.userId), {
@@ -220,6 +221,7 @@ export const listActivityQuerySchema = listQueryBase.extend({
 export const listContentCanvasesQuerySchema = listQueryBase.extend({
   organizationId: z.string().uuid().optional(),
   userId: z.string().uuid().optional(),
+  role: z.nativeEnum(UserRole).optional(),
   isPublic: booleanQuery,
   hasThumbnail: booleanQuery,
   createdFrom: optionalDate,
@@ -232,6 +234,7 @@ export const listContentLiveSessionsQuerySchema = listQueryBase.extend({
   status: z.string().trim().optional(),
   organizationId: z.string().uuid().optional(),
   userId: z.string().uuid().optional(),
+  role: z.nativeEnum(UserRole).optional(),
   canvasId: z.string().uuid().optional(),
   createdFrom: optionalDate,
   createdTo: optionalDate,
@@ -246,11 +249,23 @@ export const listContentExportsQuerySchema = listQueryBase.extend({
   format: z.string().trim().optional(),
   organizationId: z.string().uuid().optional(),
   userId: z.string().uuid().optional(),
+  role: z.nativeEnum(UserRole).optional(),
   canvasId: z.string().uuid().optional(),
   createdFrom: optionalDate,
   createdTo: optionalDate,
   completedFrom: optionalDate,
   completedTo: optionalDate,
+});
+
+export const listContentImportsQuerySchema = listQueryBase.extend({
+  status: z.nativeEnum(ContentImportStatus).optional(),
+  organizationId: z.string().uuid().optional(),
+  userId: z.string().uuid().optional(),
+  role: z.nativeEnum(UserRole).optional(),
+  createdFrom: optionalDate,
+  createdTo: optionalDate,
+  convertedFrom: optionalDate,
+  convertedTo: optionalDate,
 });
 
 export const updatePaymentProviderSchema = z.object({
@@ -339,3 +354,4 @@ export type ListActivityQuery = z.infer<typeof listActivityQuerySchema>;
 export type ListContentCanvasesQuery = z.infer<typeof listContentCanvasesQuerySchema>;
 export type ListContentLiveSessionsQuery = z.infer<typeof listContentLiveSessionsQuerySchema>;
 export type ListContentExportsQuery = z.infer<typeof listContentExportsQuerySchema>;
+export type ListContentImportsQuery = z.infer<typeof listContentImportsQuerySchema>;

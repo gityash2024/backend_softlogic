@@ -14,7 +14,11 @@ jest.mock('@/modules/auth/auth.repository', () => ({
     markOtpUsed: jest.fn(),
     updateUser: jest.fn(),
     findUserById: jest.fn(),
+    findSessionByToken: jest.fn(),
+    findUserSessionByClientSessionId: jest.fn(),
     createSession: jest.fn(),
+    deleteSession: jest.fn(),
+    updateSession: jest.fn(),
   },
 }));
 
@@ -153,7 +157,11 @@ describe('AuthService fixed OTP allowlist', () => {
     mockedAuthRepository.markOtpUsed.mockResolvedValue({} as any);
     mockedAuthRepository.updateUser.mockResolvedValue({} as any);
     mockedAuthRepository.findUserById.mockResolvedValue(activeUser as any);
+    mockedAuthRepository.findSessionByToken.mockResolvedValue(null);
+    mockedAuthRepository.findUserSessionByClientSessionId.mockResolvedValue(null);
     mockedAuthRepository.createSession.mockResolvedValue({} as any);
+    mockedAuthRepository.deleteSession.mockResolvedValue(undefined as any);
+    mockedAuthRepository.updateSession.mockResolvedValue({} as any);
     mockedFindUserContextById.mockResolvedValue(safeUserContext as any);
     mockedGenerateTokenPair.mockReturnValue({
       accessToken: 'access-token',
@@ -182,6 +190,40 @@ describe('AuthService fixed OTP allowlist', () => {
     expect(result.tokens.accessToken).toBe('access-token');
     expect(mockedAuthRepository.markOtpUsed).toHaveBeenCalledWith('otp-1');
     expect(mockedVerifyOtpHash).not.toHaveBeenCalled();
+  });
+
+  it('replaces a revoked app client session during OTP login', async () => {
+    mockedAuthRepository.findUserSessionByClientSessionId.mockResolvedValue({
+      id: 'stale-session',
+      userId: 'user-1',
+      clientSessionId: 'desktop-client-session',
+      refreshToken: null,
+      revokedAt: new Date('2026-01-01T00:00:00.000Z'),
+      expiresAt: new Date('2026-01-01T00:00:00.000Z'),
+    } as any);
+
+    const result = await authService.verifyOtp(
+      'admin@softlogicwhiteboard.com',
+      '1234',
+      '127.0.0.1',
+      { clientType: 'windows' },
+      'desktop-client-session',
+    );
+
+    expect(result.tokens.accessToken).toBe('access-token');
+    expect(mockedAuthRepository.deleteSession).not.toHaveBeenCalledWith(
+      'stale-session',
+    );
+    expect(mockedAuthRepository.createSession).not.toHaveBeenCalled();
+    expect(mockedAuthRepository.updateSession).toHaveBeenCalledWith(
+      'stale-session',
+      expect.objectContaining({
+        clientSessionId: 'desktop-client-session',
+        refreshToken: 'refresh-token',
+        revokedAt: null,
+      }),
+    );
+    expect(mockedAuthRepository.markOtpUsed).toHaveBeenCalledWith('otp-1');
   });
 
   it('rejects 1234 for a non-allowlisted production email', async () => {

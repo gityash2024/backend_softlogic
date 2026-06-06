@@ -38,6 +38,11 @@ const hashSecret = (value: string): string =>
 const isActiveSubscriptionStatus = (status: SubscriptionStatus): boolean =>
   status === SubscriptionStatus.ACTIVE || status === SubscriptionStatus.TRIAL;
 
+const USABLE_HARDWARE_KEY_STATUSES = [
+  HardwareActivationKeyStatus.AVAILABLE,
+  HardwareActivationKeyStatus.BOUND,
+] as const;
+
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 // Seat-usage warning tiers (percentages). Highest crossed tier wins.
@@ -162,6 +167,47 @@ export class LicensingService {
     );
 
     return this.poolSnapshot(subscription.seatLimit, used);
+  }
+
+  async assertSubscriptionSeatCapacity(
+    subscriptionId: string,
+    seatLimit: number,
+    db: DbClient = prisma,
+  ): Promise<void> {
+    const subscription = await db.subscription.findUnique({
+      where: { id: subscriptionId },
+      select: { id: true, organizationId: true },
+    });
+    if (!subscription) {
+      throw new AppError('Subscription not found', 404);
+    }
+
+    const [activeLicensedUsers, usableKeys] = await Promise.all([
+      subscription.organizationId
+        ? db.user.count({
+            where: {
+              primaryOrganizationId: subscription.organizationId,
+              status: UserStatus.ACTIVE,
+              deletedAt: null,
+              role: { in: [UserRole.TEACHER, UserRole.STUDENT, UserRole.PARENT] },
+            },
+          })
+        : Promise.resolve(0),
+      db.hardwareActivationKey.count({
+        where: {
+          subscriptionId,
+          status: { in: [...USABLE_HARDWARE_KEY_STATUSES] },
+        },
+      }),
+    ]);
+
+    const requiredSeats = Math.max(activeLicensedUsers, usableKeys);
+    if (seatLimit < requiredSeats) {
+      throw new AppError(
+        `Number of seats cannot be less than current usage (${requiredSeats})`,
+        409,
+      );
+    }
   }
 
   /**
@@ -438,21 +484,15 @@ export class LicensingService {
   ) {
     await this.requireSuperAdmin(actor);
     await ensureOrganizationManaged(input.organizationId, actor);
-    // #2 Default key expiry to the organization's active subscription endDate when not supplied.
-    let expiresAt = input.expiresAt ?? null;
-    if (!expiresAt) {
-      const activeSubscription = await this.getActiveOrganizationSubscription(
-        input.organizationId,
-      );
-      expiresAt = activeSubscription?.endDate ?? null;
-    }
-    // #28 maxDevices defaults to 1 (today's single-device behavior). Clamp to >= 1.
+    const { subscription, expiresAt } = await this.resolveKeySubscription(input);
     const maxDevices = Math.max(1, Math.trunc(input.maxDevices ?? 1));
+    await this.assertHardwareKeyCapacity(subscription.id, 1);
+
     const rawKey = `SL-${randomBytes(12).toString('hex').toUpperCase()}`;
     const record = await prisma.hardwareActivationKey.create({
       data: {
         organizationId: input.organizationId,
-        subscriptionId: input.subscriptionId ?? null,
+        subscriptionId: subscription.id,
         activationKeyHash: hashSecret(rawKey),
         activationKeyEncrypted: encryptSecret(rawKey),
         assignedUserId: input.assignedUserId ?? null,
@@ -484,6 +524,11 @@ export class LicensingService {
       }>;
     },
   ) {
+    await this.requireSuperAdmin(actor);
+    await ensureOrganizationManaged(input.organizationId, actor);
+    const { subscription } = await this.resolveKeySubscription(input);
+    await this.assertHardwareKeyCapacity(subscription.id, input.keys.length);
+
     const created: Array<
       Awaited<ReturnType<LicensingService['createHardwareActivationKey']>>
     > = [];
@@ -600,9 +645,26 @@ export class LicensingService {
     return prisma.$transaction(async (tx) => {
       const key = await tx.hardwareActivationKey.findUnique({
         where: { activationKeyHash: hashSecret(input.activationKey) },
+        include: {
+          organization: { select: { status: true, deletedAt: true } },
+          subscription: { select: { status: true, endDate: true, deletedAt: true } },
+        },
       });
       if (!key || key.status === HardwareActivationKeyStatus.DISABLED) {
         throw new AppError('Invalid activation key', 404);
+      }
+      if (
+        key.organization.deletedAt ||
+        key.organization.status !== OrganizationStatus.ACTIVE
+      ) {
+        throw new AppError('Organization is not active for activation', 403);
+      }
+      if (
+        !key.subscription ||
+        key.subscription.deletedAt ||
+        !isActiveSubscriptionStatus(key.subscription.status)
+      ) {
+        throw new AppError('Subscription is not active for activation', 403);
       }
       if (key.expiresAt && key.expiresAt <= new Date()) {
         await tx.hardwareActivationKey.update({
@@ -823,6 +885,80 @@ export class LicensingService {
     });
     await this.audit(actor, 'hardware.activation.reset', 'hardware_activation', activationId, 'Reset hardware activation');
     return activation;
+  }
+
+  async revokeHardwareActivationKey(
+    actor: AuthenticatedUserLike,
+    keyId: string,
+  ) {
+    await this.requireSuperAdmin(actor);
+    const key = await prisma.hardwareActivationKey.findUnique({
+      where: { id: keyId },
+      select: { id: true, organizationId: true },
+    });
+    if (!key) throw new AppError('Activation key not found', 404);
+    await ensureOrganizationManaged(key.organizationId, actor);
+
+    const result = await prisma.$transaction(async (tx) => {
+      const disabledActivations = await tx.hardwareActivation.updateMany({
+        where: {
+          activationKeyId: keyId,
+          status: HardwareActivationStatus.ACTIVE,
+        },
+        data: { status: HardwareActivationStatus.DISABLED },
+      });
+      const updated = await tx.hardwareActivationKey.update({
+        where: { id: keyId },
+        data: {
+          status: HardwareActivationKeyStatus.DISABLED,
+          boundActivationId: null,
+        },
+      });
+      return { key: updated, disabledActivationCount: disabledActivations.count };
+    });
+
+    await this.audit(
+      actor,
+      'hardware.activation_key.revoke',
+      'hardware_activation_key',
+      keyId,
+      `Revoked hardware activation key; disabled ${result.disabledActivationCount} activation(s)`,
+    );
+    return result;
+  }
+
+  async replaceHardwareActivationKey(
+    actor: AuthenticatedUserLike,
+    keyId: string,
+  ) {
+    await this.requireSuperAdmin(actor);
+    const existing = await prisma.hardwareActivationKey.findUnique({
+      where: { id: keyId },
+    });
+    if (!existing) throw new AppError('Activation key not found', 404);
+    await ensureOrganizationManaged(existing.organizationId, actor);
+    if (!existing.subscriptionId) {
+      throw new AppError('Activation key is not tied to a subscription', 409);
+    }
+    await this.assertHardwareKeyCapacity(existing.subscriptionId, 1, [existing.id]);
+
+    await this.revokeHardwareActivationKey(actor, keyId);
+    const replacement = await this.createHardwareActivationKey(actor, {
+      organizationId: existing.organizationId,
+      subscriptionId: existing.subscriptionId,
+      assignedUserId: existing.assignedUserId,
+      label: existing.label ? `${existing.label} replacement` : 'Replacement key',
+      expiresAt: existing.expiresAt,
+      maxDevices: existing.maxDevices,
+    });
+    await this.audit(
+      actor,
+      'hardware.activation_key.replace',
+      'hardware_activation_key',
+      keyId,
+      `Replaced hardware activation key with ${replacement.id}`,
+    );
+    return replacement;
   }
 
   async getSubscriptionDetails(
@@ -1092,6 +1228,9 @@ export class LicensingService {
     expired: number;
     remindersSent: number;
     checked: number;
+    keysExpired: number;
+    activationsDisabled: number;
+    sessionsRevoked: number;
   }> {
     const now = new Date();
 
@@ -1161,10 +1300,97 @@ export class LicensingService {
       }
     }
 
+    const invalidSubscriptions = await prisma.subscription.findMany({
+      where: {
+        OR: [
+          { status: { in: [SubscriptionStatus.EXPIRED, SubscriptionStatus.CANCELED] } },
+          { deletedAt: { not: null } },
+          {
+            organization: {
+              OR: [
+                { deletedAt: { not: null } },
+                { status: { not: OrganizationStatus.ACTIVE } },
+              ],
+            },
+          },
+        ],
+      },
+      select: { id: true, organizationId: true },
+    });
+    const invalidSubscriptionIds = invalidSubscriptions.map((row) => row.id);
+    const invalidOrganizationIds = Array.from(
+      new Set(
+        invalidSubscriptions
+          .map((row) => row.organizationId)
+          .filter((id): id is string => Boolean(id)),
+      ),
+    );
+
+    let keysExpired = 0;
+    let activationsDisabled = 0;
+    let sessionsRevoked = 0;
+    if (invalidSubscriptionIds.length || invalidOrganizationIds.length) {
+      const hardwareWhere: Prisma.HardwareActivationKeyWhereInput = {
+        status: { in: [...USABLE_HARDWARE_KEY_STATUSES] },
+        OR: [
+          ...(invalidSubscriptionIds.length
+            ? [{ subscriptionId: { in: invalidSubscriptionIds } }]
+            : []),
+          ...(invalidOrganizationIds.length
+            ? [{ organizationId: { in: invalidOrganizationIds } }]
+            : []),
+        ],
+      };
+      const activationWhere: Prisma.HardwareActivationWhereInput = {
+        status: HardwareActivationStatus.ACTIVE,
+        OR: [
+          ...(invalidSubscriptionIds.length
+            ? [
+                {
+                  activationKey: {
+                    subscriptionId: { in: invalidSubscriptionIds },
+                  },
+                },
+              ]
+            : []),
+          ...(invalidOrganizationIds.length
+            ? [{ organizationId: { in: invalidOrganizationIds } }]
+            : []),
+        ],
+      };
+
+      const [keys, activations, sessions] = await prisma.$transaction([
+        prisma.hardwareActivationKey.updateMany({
+          where: hardwareWhere,
+          data: {
+            status: HardwareActivationKeyStatus.EXPIRED,
+            boundActivationId: null,
+          },
+        }),
+        prisma.hardwareActivation.updateMany({
+          where: activationWhere,
+          data: { status: HardwareActivationStatus.DISABLED },
+        }),
+        prisma.session.updateMany({
+          where: {
+            revokedAt: null,
+            user: { primaryOrganizationId: { in: invalidOrganizationIds } },
+          },
+          data: { refreshToken: null, revokedAt: now },
+        }),
+      ]);
+      keysExpired = keys.count;
+      activationsDisabled = activations.count;
+      sessionsRevoked = sessions.count;
+    }
+
     return {
       expired: expiredResult.count,
       remindersSent,
       checked: upcoming.length,
+      keysExpired,
+      activationsDisabled,
+      sessionsRevoked,
     };
   }
 
@@ -1264,6 +1490,68 @@ export class LicensingService {
   private metaToJson(meta: unknown): Record<string, unknown> {
     if (!meta || typeof meta !== 'object') return {};
     return meta as Record<string, unknown>;
+  }
+
+  private async resolveKeySubscription(
+    input: {
+      organizationId: string;
+      subscriptionId?: string | null;
+      expiresAt?: Date | null;
+    },
+    db: DbClient = prisma,
+  ) {
+    const organization = await db.organization.findUnique({
+      where: { id: input.organizationId },
+      select: { id: true, status: true, deletedAt: true },
+    });
+    if (!organization) throw new AppError('Organization not found', 404);
+    if (organization.deletedAt || organization.status !== OrganizationStatus.ACTIVE) {
+      throw new AppError('Organization is not active for activation keys', 403);
+    }
+
+    const subscription = input.subscriptionId
+      ? await db.subscription.findUnique({
+          where: { id: input.subscriptionId },
+        })
+      : await this.getActiveOrganizationSubscription(input.organizationId, db);
+    if (!subscription) {
+      throw new AppError('Active subscription is required before creating activation keys', 409);
+    }
+    if (
+      subscription.organizationId !== input.organizationId ||
+      subscription.deletedAt ||
+      !isActiveSubscriptionStatus(subscription.status)
+    ) {
+      throw new AppError('Subscription is not active for this organization', 409);
+    }
+    const expiresAt = input.expiresAt ?? subscription.endDate ?? null;
+    return { subscription, expiresAt };
+  }
+
+  private async assertHardwareKeyCapacity(
+    subscriptionId: string,
+    additionalKeys: number,
+    excludeKeyIds: string[] = [],
+    db: DbClient = prisma,
+  ): Promise<void> {
+    const subscription = await db.subscription.findUnique({
+      where: { id: subscriptionId },
+      select: { id: true, seatLimit: true },
+    });
+    if (!subscription) throw new AppError('Subscription not found', 404);
+    const usableCount = await db.hardwareActivationKey.count({
+      where: {
+        subscriptionId,
+        status: { in: [...USABLE_HARDWARE_KEY_STATUSES] },
+        ...(excludeKeyIds.length ? { id: { notIn: excludeKeyIds } } : {}),
+      },
+    });
+    if (usableCount + additionalKeys > subscription.seatLimit) {
+      throw new AppError(
+        `Activation key seat limit reached (${usableCount}/${subscription.seatLimit} usable keys)`,
+        409,
+      );
+    }
   }
 
   private async audit(

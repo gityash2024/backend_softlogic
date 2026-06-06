@@ -148,17 +148,23 @@ export const createSignedImportObjectUploadIntent = async ({
   filename,
   mimeType,
   userId,
+  userRole,
+  organizationId,
 }: {
   filename: string;
   mimeType?: string;
   userId: string;
+  userRole?: string | null;
+  organizationId?: string | null;
 }): Promise<SignedObjectUploadIntent> => {
   const config = requireConfig();
   const extension = path.extname(filename).toLowerCase();
   const basename =
     sanitizeKeyPart(path.basename(filename, extension)) || 'document';
   const safeUserId = sanitizeKeyPart(userId) || 'user';
-  const storageKey = `${DOCUMENT_IMPORT_FOLDER}/${safeUserId}/${Date.now()}-${randomUUID()}-${basename}${extension}`;
+  const safeUserRole = sanitizeKeyPart(userRole ?? '') || 'role';
+  const safeOrganizationId = sanitizeKeyPart(organizationId ?? '') || 'no-org';
+  const storageKey = `${DOCUMENT_IMPORT_FOLDER}/${safeOrganizationId}/${safeUserRole}/${safeUserId}/${Date.now()}-${randomUUID()}-${basename}${extension}`;
   const contentType = mimeType?.trim() || 'application/octet-stream';
   const command = new PutObjectCommand({
     Bucket: config.bucket,
@@ -192,12 +198,13 @@ export const isExpectedImportObjectKey = ({
   userId: string;
 }): boolean => {
   const safeUserId = sanitizeKeyPart(userId) || 'user';
-  const expectedPrefix = `${DOCUMENT_IMPORT_FOLDER}/${safeUserId}/`;
+  const prefix = `${DOCUMENT_IMPORT_FOLDER}/`;
   return (
-    storageKey.startsWith(expectedPrefix) &&
+    storageKey.startsWith(prefix) &&
+    storageKey.split('/').includes(safeUserId) &&
     !storageKey.includes('..') &&
     !storageKey.includes('\\') &&
-    storageKey.length > expectedPrefix.length
+    storageKey.length > prefix.length
   );
 };
 

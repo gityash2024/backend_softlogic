@@ -34,12 +34,14 @@ describe('import temp object storage upload intent', () => {
       mimeType:
         'application/vnd.openxmlformats-officedocument.presentationml.presentation',
       userId: 'user-1',
+      userRole: 'TEACHER',
+      organizationId: 'org-1',
     });
 
     expect(intent.provider).toBe('s3');
     expect(intent.method).toBe('PUT');
     expect(intent.maxSizeBytes).toBe(MAX_DOCUMENT_IMPORT_BYTES);
-    expect(intent.storageKey).toContain('softlogic/imports/user-1/');
+    expect(intent.storageKey).toContain('softlogic/imports/org-1/teacher/user-1/');
     expect(intent.storageKey).toMatch(/may-ca\.pptx$/);
     expect(intent.uploadUrl).toContain('X-Amz-Signature=');
     expect(intent.uploadUrl).not.toContain('storage-secret');
@@ -63,13 +65,15 @@ describe('import temp object storage upload intent', () => {
       mimeType:
         'application/vnd.openxmlformats-officedocument.presentationml.presentation',
       userId: 'user-1',
+      userRole: 'TEACHER',
+      organizationId: 'org-1',
     });
     const uploadUrl = new URL(intent.uploadUrl);
 
     expect(uploadUrl.hostname).toBe(
       'softlogic-portal-storage.s3.ap-southeast-2.amazonaws.com',
     );
-    expect(uploadUrl.pathname).toContain('/softlogic/imports/user-1/');
+    expect(uploadUrl.pathname).toContain('/softlogic/imports/org-1/teacher/user-1/');
     expect(uploadUrl.pathname).not.toContain('/softlogic-portal-storage/');
   });
 });

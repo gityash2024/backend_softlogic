@@ -16,6 +16,7 @@ import {
   listActivityQuerySchema,
   listContentCanvasesQuerySchema,
   listContentExportsQuerySchema,
+  listContentImportsQuerySchema,
   listContentLiveSessionsQuerySchema,
   listOrganizationsQuerySchema,
   listSubscriptionsQuerySchema,
@@ -73,6 +74,8 @@ router.get('/subscriptions/:id/payments', adminController.listSubscriptionPaymen
 router.post('/subscriptions', validate(createSubscriptionSchema), adminController.createSubscription);
 router.put('/subscriptions/:id', validate(updateSubscriptionSchema), adminController.updateSubscription);
 router.patch('/subscriptions/:id', validate(updateSubscriptionSchema), adminController.updateSubscription);
+router.delete('/subscriptions/:id', adminController.deleteSubscription);
+router.post('/subscriptions/:id/restore', adminController.restoreSubscription);
 router.post('/subscriptions/:id/renew', validate(renewSubscriptionSchema), adminController.renewSubscription);
 router.post('/subscriptions/:id/approve', adminController.approveSubscription);
 router.post('/subscriptions/:id/reject', validate(rejectSubscriptionSchema), adminController.rejectSubscription);
@@ -87,6 +90,8 @@ router.get('/hardware/activation-keys/export', validate(exportActivationKeysQuer
 router.post('/hardware/activation-keys/bulk', validate(bulkCreateHardwareActivationKeysSchema), adminController.bulkCreateHardwareActivationKeys);
 router.post('/hardware/activation-keys', validate(createHardwareActivationKeySchema), adminController.createHardwareActivationKey);
 router.post('/hardware/activation-keys/email-org-admin', adminController.emailActivationKeysToOrgAdmin);
+router.post('/hardware/activation-keys/:id/revoke', adminController.revokeHardwareActivationKey);
+router.post('/hardware/activation-keys/:id/replace', adminController.replaceHardwareActivationKey);
 router.post('/hardware/activations/:id/reset', adminController.resetHardwareActivation);
 router.get('/organizations/:id/license-details', adminController.getOrganizationLicenseDetails);
 
@@ -105,5 +110,8 @@ router.get('/content/live-sessions/:id', adminController.getContentLiveSession);
 router.get('/content/exports', validate(listContentExportsQuerySchema, 'query'), adminController.listContentExports);
 router.get('/content/exports/export', validate(listContentExportsQuerySchema.merge(exportQuerySchema), 'query'), adminController.exportContentExports);
 router.get('/content/exports/:id', adminController.getContentExport);
+router.get('/content/imports', validate(listContentImportsQuerySchema, 'query'), adminController.listContentImports);
+router.get('/content/imports/export', validate(listContentImportsQuerySchema.merge(exportQuerySchema), 'query'), adminController.exportContentImports);
+router.get('/content/imports/:id', adminController.getContentImport);
 
 export const adminRoutes = router;

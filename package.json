@@ -1,6 +1,6 @@
 {
   "name": "softlogic-whiteboard-backend",
-  "version": "1.0.10",
+  "version": "1.0.16",
   "description": "Softlogic Whiteboard - Node.js/Express Backend",
   "main": "dist/index.js",
   "scripts": {
