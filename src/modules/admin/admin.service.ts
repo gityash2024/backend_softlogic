@@ -248,6 +248,9 @@ const ADMIN_ONBOARDING_ROLES = [
   UserRole.PARTNER_ADMIN,
   UserRole.CUSTOMER_ADMIN,
   UserRole.ADMIN,
+  UserRole.TEACHER,
+  UserRole.STUDENT,
+  UserRole.PARENT,
 ] as const;
 
 const normalizeEmail = (value?: string | null): string | null => {
@@ -1576,7 +1579,24 @@ export class AdminService {
     });
     const user = await prisma.user.findFirst({
       where: { AND: [{ id: userId }, scope] },
-      include: { primaryOrganization: true },
+      include: {
+        primaryOrganization: true,
+        parentLinks: {
+          where: { status: 'ACTIVE' },
+          select: {
+            studentUserId: true,
+            studentUser: {
+              select: {
+                id: true,
+                email: true,
+                name: true,
+                status: true,
+                primaryOrganizationId: true,
+              },
+            },
+          },
+        },
+      },
     });
     if (!user) throw new AppError('User not found', 404);
     const subscription = await prisma.subscription.findFirst({
@@ -1590,7 +1610,14 @@ export class AdminService {
       },
       orderBy: { updatedAt: 'desc' },
     });
-    return { ...user, subscription };
+    const linkedStudents = user.parentLinks.map((link) => link.studentUser);
+    return {
+      ...user,
+      parentLinks: undefined,
+      linkedStudentIds: linkedStudents.map((student) => student.id),
+      linkedStudents,
+      subscription,
+    };
   }
 
   async exportUsers(actor: AuthenticatedUserLike, query: ListUsersQuery & { format: AdminExportFormat }) {

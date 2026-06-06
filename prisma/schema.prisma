@@ -192,14 +192,19 @@ model OrganizationMembership {
 model Session {
   id           String   @id @default(uuid())
   userId       String
-  refreshToken String   @unique
+  refreshToken String?  @unique
+  clientSessionId String?
   deviceInfo   Json?
   ipAddress    String?
   expiresAt    DateTime
+  lastSeenAt   DateTime?
+  revokedAt    DateTime?
   createdAt    DateTime @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  @@unique([userId, clientSessionId])
+  @@index([userId, revokedAt, expiresAt])
   @@map("sessions")
 }
 

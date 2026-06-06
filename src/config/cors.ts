@@ -42,7 +42,17 @@ export const corsConfig: CorsOptions = {
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+  allowedHeaders: [
+    'Content-Type',
+    'Authorization',
+    'X-Requested-With',
+    'X-Refresh-Token',
+    'X-SoftLogic-Client',
+    'X-SoftLogic-Client-Session-Id',
+    'X-SoftLogic-Platform',
+    'X-SoftLogic-Device',
+    'X-SoftLogic-App-Version',
+  ],
   exposedHeaders: ['X-Total-Count', 'X-Page', 'X-Per-Page'],
   maxAge: 86400, // 24 hours
 };

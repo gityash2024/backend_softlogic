@@ -11,6 +11,7 @@ export interface WriteAuditLogInput {
   readonly targetType: string;
   readonly targetId?: string | null;
   readonly summary?: string | null;
+  readonly metadata?: Record<string, unknown> | null;
   /**
    * Request IP address. The AdminAuditLog model has no dedicated `ip` column, so
    * the value is recorded in `metadata.ip` and appended to `summary` for
@@ -30,6 +31,7 @@ export const writeAuditLog = async ({
   targetType,
   targetId,
   summary,
+  metadata,
   ip,
 }: WriteAuditLogInput): Promise<void> => {
   // actorUserId is a required non-null FK — skip when unknown instead of crashing.
@@ -42,6 +44,10 @@ export const writeAuditLog = async ({
   const summaryWithIp = trimmedIp
     ? `${baseSummary ? `${baseSummary} ` : ''}(ip: ${trimmedIp})`
     : baseSummary;
+  const metadataPayload = {
+    ...(metadata ?? {}),
+    ...(trimmedIp ? { ip: trimmedIp } : {}),
+  };
 
   try {
     await prisma.adminAuditLog.create({
@@ -51,7 +57,8 @@ export const writeAuditLog = async ({
         targetType,
         targetId: targetId ?? null,
         summary: summaryWithIp,
-        metadata: trimmedIp ? { ip: trimmedIp } : undefined,
+        metadata:
+          Object.keys(metadataPayload).length > 0 ? metadataPayload : undefined,
       },
     });
   } catch (error) {

@@ -11,6 +11,7 @@ describe('admin organization validator', () => {
       settings: {
         ai: {
           geminiApiKey: 'test-key',
+          geminiApiKeys: ['test-key', 'backup-key'],
           geminiTextModel: 'gemini-2.5-flash',
           geminiImageModel: 'gemini-2.5-flash-image',
         },

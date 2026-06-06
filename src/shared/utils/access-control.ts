@@ -8,6 +8,12 @@ export interface AuthenticatedUserLike {
   organizationId?: string | null;
 }
 
+export interface CanvasAccessMetadata {
+  canEdit: boolean;
+  canDelete: boolean;
+  canHostLiveSession: boolean;
+}
+
 export const isSuperAdmin = (role: UserRole): boolean => role === 'SUPER_ADMIN';
 
 export const isAdminRole = (role: UserRole): boolean =>
@@ -89,7 +95,87 @@ export const getManagedOrganizationIds = async (
   return [];
 };
 
+export const getLinkedStudentIdsForParent = async (
+  parentUserId: string,
+): Promise<string[]> => {
+  const links = await prisma.parentStudentLink.findMany({
+    where: { parentUserId, status: 'ACTIVE' },
+    select: { studentUserId: true },
+  });
+  return links.map((link) => link.studentUserId);
+};
+
+export const canvasReadWhere = async (
+  user: AuthenticatedUserLike,
+): Promise<Prisma.CanvasWhereInput> => {
+  if (isSuperAdmin(user.role)) {
+    return { deletedAt: null };
+  }
+
+  if (isAdminRole(user.role)) {
+    const organizationIds = await getManagedOrganizationIds(user);
+    return {
+      deletedAt: null,
+      ...(organizationIds && organizationIds.length > 0
+        ? { organizationId: { in: organizationIds } }
+        : { id: '__none__' }),
+    };
+  }
+
+  if (user.role === UserRole.TEACHER) {
+    return { deletedAt: null, userId: user.userId };
+  }
+
+  if (user.role === UserRole.STUDENT) {
+    return {
+      deletedAt: null,
+      liveSessions: {
+        some: {
+          participants: { some: { userId: user.userId } },
+        },
+      },
+    };
+  }
+
+  if (user.role === UserRole.PARENT) {
+    const studentIds = await getLinkedStudentIdsForParent(user.userId);
+    if (studentIds.length === 0) {
+      return { id: '__none__' };
+    }
+    return {
+      deletedAt: null,
+      OR: [
+        { userId: { in: studentIds } },
+        {
+          liveSessions: {
+            some: {
+              OR: [
+                { participants: { some: { userId: { in: studentIds } } } },
+                { invites: { some: { invitedUserId: { in: studentIds } } } },
+              ],
+            },
+          },
+        },
+      ],
+    };
+  }
+
+  return { id: '__none__' };
+};
+
 const canvasAccessWhere = async (
+  canvasId: string,
+  user: AuthenticatedUserLike,
+): Promise<Prisma.CanvasWhereInput> => {
+  return {
+    AND: [
+      { id: canvasId },
+      await canvasReadWhere(user),
+    ],
+  };
+};
+
+const canvasWriteWhere = async (
   canvasId: string,
   user: AuthenticatedUserLike,
 ): Promise<Prisma.CanvasWhereInput> => {
@@ -97,17 +183,50 @@ const canvasAccessWhere = async (
     return { id: canvasId, deletedAt: null };
   }
 
-  const organizationIds = await getAccessibleOrganizationIds(user);
+  if (isAdminRole(user.role)) {
+    const organizationIds = await getManagedOrganizationIds(user);
+    return {
+      id: canvasId,
+      deletedAt: null,
+      ...(organizationIds && organizationIds.length > 0
+        ? { organizationId: { in: organizationIds } }
+        : { id: '__none__' }),
+    };
+  }
 
   return {
     id: canvasId,
     deletedAt: null,
-    OR: [
-      { userId: user.userId },
-      ...(organizationIds && organizationIds.length > 0
-        ? [{ organizationId: { in: organizationIds } }]
-        : []),
-    ],
+    userId: user.userId,
+  };
+};
+
+export const canvasAccessMetadata = async (
+  canvas: { userId: string; organizationId?: string | null },
+  user: AuthenticatedUserLike,
+): Promise<CanvasAccessMetadata> => {
+  if (isSuperAdmin(user.role)) {
+    return { canEdit: true, canDelete: true, canHostLiveSession: true };
+  }
+
+  if (isAdminRole(user.role)) {
+    const organizationIds = await getManagedOrganizationIds(user);
+    const canManage =
+      organizationIds === null ||
+      (canvas.organizationId != null &&
+        organizationIds.includes(canvas.organizationId));
+    return {
+      canEdit: canManage,
+      canDelete: canManage,
+      canHostLiveSession: canManage,
+    };
+  }
+
+  const isOwner = user.role === UserRole.TEACHER && canvas.userId === user.userId;
+  return {
+    canEdit: isOwner,
+    canDelete: isOwner,
+    canHostLiveSession: isOwner,
   };
 };
 
@@ -127,6 +246,27 @@ export const ensureCanvasAccess = async (
 
   if (!canvas) {
     throw new AppError('Canvas not found', 404);
+  }
+
+  return canvas;
+};
+
+export const ensureCanvasWriteAccess = async (
+  canvasId: string,
+  user: AuthenticatedUserLike,
+) => {
+  const canvas = await prisma.canvas.findFirst({
+    where: await canvasWriteWhere(canvasId, user),
+    include: {
+      organization: true,
+      slides: {
+        orderBy: { order: 'asc' },
+      },
+    },
+  });
+
+  if (!canvas) {
+    throw new AppError('Only the board creator can edit this whiteboard', 403);
   }
 
   return canvas;

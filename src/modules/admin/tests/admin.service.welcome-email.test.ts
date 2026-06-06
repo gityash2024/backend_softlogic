@@ -1,6 +1,10 @@
 import { UserRole, UserStatus } from '@prisma/client';
 
 jest.mock('@/config', () => ({
+  env: {
+    PUBLIC_ADMIN_URL: 'https://admin.softlogic.test',
+    PUBLIC_APP_URL: 'https://app.softlogic.test',
+  },
   prisma: {
     $transaction: jest.fn(),
     adminAuditLog: {
@@ -22,12 +26,13 @@ jest.mock('@/modules/users/user-context.service', () => ({
 
 jest.mock('@/shared/utils/email', () => ({
   sendWelcomeEmail: jest.fn(),
+  sendPasswordSetupEmail: jest.fn(),
 }));
 
 import { prisma } from '@/config';
 import { adminService } from '@/modules/admin/admin.service';
 import { findUserContextById } from '@/modules/users/user-context.service';
-import { sendWelcomeEmail } from '@/shared/utils/email';
+import { sendPasswordSetupEmail, sendWelcomeEmail } from '@/shared/utils/email';
 
 const mockedPrisma = prisma as unknown as {
   $transaction: jest.Mock;
@@ -46,6 +51,10 @@ describe('AdminService welcome email', () => {
         organizationMembership: {
           create: jest.fn(),
         },
+        otp: {
+          updateMany: jest.fn(),
+          create: jest.fn().mockResolvedValue({ id: 'otp-1' }),
+        },
         user: {
           create: mockedPrisma.user.create,
         },
@@ -61,7 +70,7 @@ describe('AdminService welcome email', () => {
     } as never);
   });
 
-  it('sends one welcome email after an admin-created user is persisted', async () => {
+  it('sends one password setup email after an admin-created student is persisted', async () => {
     mockedPrisma.user.findFirst.mockResolvedValue(null);
     mockedPrisma.user.create.mockResolvedValue({
       id: 'student-1',
@@ -81,12 +90,14 @@ describe('AdminService welcome email', () => {
       },
     );
 
-    expect(sendWelcomeEmail).toHaveBeenCalledTimes(1);
-    expect(sendWelcomeEmail).toHaveBeenCalledWith(
+    expect(sendWelcomeEmail).not.toHaveBeenCalled();
+    expect(sendPasswordSetupEmail).toHaveBeenCalledTimes(1);
+    expect(sendPasswordSetupEmail).toHaveBeenCalledWith(
       expect.objectContaining({
         to: 'student@example.com',
         name: 'Student Demo',
         role: UserRole.STUDENT,
+        setupUrl: expect.stringContaining('/setup-password?token='),
       }),
     );
   });

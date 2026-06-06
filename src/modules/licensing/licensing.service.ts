@@ -93,7 +93,8 @@ export interface VerifyHardwareActivationResult {
     | 'bound_to_other_device'
     | 'not_bound'
     | 'subscription_inactive'
-    | 'organization_inactive';
+    | 'organization_inactive'
+    | 'organization_mismatch';
   organizationId?: string;
   organizationName?: string;
   subscriptionId?: string;
@@ -330,19 +331,6 @@ export class LicensingService {
     ) {
       throw new AppError('Active organization is required for licensed users', 400);
     }
-    if (
-      organization.teacherOnlyMode &&
-      (input.role === UserRole.STUDENT || input.role === UserRole.PARENT)
-    ) {
-      throw new AppError('Student and parent accounts are disabled for teacher-only organizations', 403);
-    }
-    if (input.role === UserRole.STUDENT && !organization.studentLoginEnabled) {
-      throw new AppError('Student logins are not enabled for this organization', 403);
-    }
-    if (input.role === UserRole.PARENT && !organization.parentLoginEnabled) {
-      throw new AppError('Parent logins are not enabled for this organization', 403);
-    }
-
     const subscription = await this.getActiveOrganizationSubscription(input.organizationId);
     if (!subscription) {
       throw new AppError('An active subscription is required before creating licensed users', 403);
@@ -623,6 +611,18 @@ export class LicensingService {
         });
         throw new AppError('Activation key has expired', 410);
       }
+      if (input.userId) {
+        const user = await tx.user.findUnique({
+          where: { id: input.userId },
+          select: { primaryOrganizationId: true },
+        });
+        if (!user || user.primaryOrganizationId !== key.organizationId) {
+          throw new AppError(
+            'Activation key is not assigned to this organization',
+            403,
+          );
+        }
+      }
       // #28 Multi-device per key. If THIS device is already bound to the key, re-verify it.
       // Otherwise enforce the key's device limit (maxDevices, default 1 = today's behavior).
       const existing = await tx.hardwareActivation.findUnique({
@@ -723,6 +723,15 @@ export class LicensingService {
       },
     });
     if (!key) return { valid: false, reason: 'invalid_key' };
+    if (input.userId) {
+      const user = await prisma.user.findUnique({
+        where: { id: input.userId },
+        select: { primaryOrganizationId: true },
+      });
+      if (!user || user.primaryOrganizationId !== key.organizationId) {
+        return { valid: false, reason: 'organization_mismatch' };
+      }
+    }
     if (key.status === HardwareActivationKeyStatus.DISABLED) {
       return { valid: false, reason: 'disabled' };
     }

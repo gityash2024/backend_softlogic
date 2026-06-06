@@ -2,13 +2,13 @@ import { Request, Response, NextFunction } from 'express';
 import { prisma } from '@/config';
 import { ApiResponse } from '@/shared/utils/api-response';
 import { AppError } from '@/shared/errors/AppError';
-import { ensureCanvasAccess } from '@/shared/utils/access-control';
+import { ensureCanvasAccess, ensureCanvasWriteAccess } from '@/shared/utils/access-control';
 
 export class SlidesController {
   async list(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const { id: canvasId } = req.params;
-      await ensureCanvasAccess(canvasId, req.user!);
+      await ensureCanvasWriteAccess(canvasId, req.user!);
 
       const slides = await prisma.slide.findMany({ where: { canvasId }, orderBy: { order: 'asc' } });
       ApiResponse.success(res, slides);
@@ -18,7 +18,7 @@ export class SlidesController {
   async create(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const { id: canvasId } = req.params;
-      await ensureCanvasAccess(canvasId, req.user!);
+      await ensureCanvasWriteAccess(canvasId, req.user!);
 
       const maxOrder = await prisma.slide.aggregate({ where: { canvasId }, _max: { order: true } });
       const newOrder = (maxOrder._max.order ?? -1) + 1;
@@ -33,7 +33,7 @@ export class SlidesController {
   async getById(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const { id: canvasId, sid: slideId } = req.params;
-      await ensureCanvasAccess(canvasId, req.user!);
+      await ensureCanvasWriteAccess(canvasId, req.user!);
       const slide = await prisma.slide.findFirst({ where: { id: slideId, canvasId } });
       if (!slide) throw new AppError('Slide not found', 404);
       ApiResponse.success(res, slide);
@@ -45,7 +45,7 @@ export class SlidesController {
       const { id: canvasId, sid: slideId } = req.params;
       const { elements, name, thumbnail } = req.body;
 
-      await ensureCanvasAccess(canvasId, req.user!);
+      await ensureCanvasWriteAccess(canvasId, req.user!);
       const slide = await prisma.slide.findFirst({ where: { id: slideId, canvasId } });
       if (!slide) throw new AppError('Slide not found', 404);
 
@@ -60,7 +60,7 @@ export class SlidesController {
   async delete(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const { id: canvasId, sid: slideId } = req.params;
-      await ensureCanvasAccess(canvasId, req.user!);
+      await ensureCanvasWriteAccess(canvasId, req.user!);
       const slide = await prisma.slide.findFirst({ where: { id: slideId, canvasId } });
       if (!slide) throw new AppError('Slide not found', 404);
 
@@ -75,7 +75,7 @@ export class SlidesController {
       const { slideIds } = req.body;
 
       if (!Array.isArray(slideIds)) throw new AppError('slideIds must be an array', 400);
-      await ensureCanvasAccess(canvasId, req.user!);
+      await ensureCanvasWriteAccess(canvasId, req.user!);
 
       const existingSlides = await prisma.slide.findMany({
         where: { canvasId },

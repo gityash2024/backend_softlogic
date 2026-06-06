@@ -1,31 +1,47 @@
-import { Server } from 'socket.io';
-import { Server as HttpServer } from 'http';
-import { verifyAccessToken } from '@/shared/utils/jwt';
-import { ensureCanvasAccess, AuthenticatedUserLike } from '@/shared/utils/access-control';
-import { prisma } from '@/config';
-import { liveSessionService } from '@/modules/live-sessions/live-session.service';
+import { Server } from "socket.io";
+import { Server as HttpServer } from "http";
+import { verifyAccessToken } from "@/shared/utils/jwt";
+import {
+  ensureCanvasAccess,
+  AuthenticatedUserLike,
+} from "@/shared/utils/access-control";
+import { prisma } from "@/config";
+import { liveSessionService } from "@/modules/live-sessions/live-session.service";
 
 interface SocketUserContext extends AuthenticatedUserLike {
   email: string;
 }
 
-const resolveSocketToken = (authorization?: string, authToken?: unknown): string | null => {
-  if (typeof authToken === 'string' && authToken.trim().length > 0) {
+const canHostSocketLiveSession = (role: string): boolean =>
+  role === "TEACHER" ||
+  role === "ADMIN" ||
+  role === "CUSTOMER_ADMIN" ||
+  role === "PARTNER_ADMIN" ||
+  role === "SUPER_ADMIN";
+
+const socketParticipantRole = (role: string): "TEACHER" | "STUDENT" =>
+  canHostSocketLiveSession(role) ? "TEACHER" : "STUDENT";
+
+const resolveSocketToken = (
+  authorization?: string,
+  authToken?: unknown,
+): string | null => {
+  if (typeof authToken === "string" && authToken.trim().length > 0) {
     return authToken.trim();
   }
 
-  if (!authorization?.startsWith('Bearer ')) {
+  if (!authorization?.startsWith("Bearer ")) {
     return null;
   }
 
-  return authorization.slice('Bearer '.length).trim();
+  return authorization.slice("Bearer ".length).trim();
 };
 
 export const setupSockets = (httpServer: HttpServer): Server => {
   const io = new Server(httpServer, {
     cors: {
-      origin: '*',
-      methods: ['GET', 'POST'],
+      origin: "*",
+      methods: ["GET", "POST"],
     },
   });
 
@@ -37,58 +53,69 @@ export const setupSockets = (httpServer: HttpServer): Server => {
       );
 
       if (!token) {
-        return next(new Error('Authentication token is required'));
+        return next(new Error("Authentication token is required"));
       }
 
       socket.data.user = verifyAccessToken(token);
       return next();
     } catch {
-      return next(new Error('Invalid authentication token'));
+      return next(new Error("Invalid authentication token"));
     }
   });
 
-  io.on('connection', (socket) => {
+  io.on("connection", (socket) => {
     const user = socket.data.user as SocketUserContext | undefined;
-    console.log(`Socket connected: ${socket.id} (${user?.email ?? 'unknown'})`);
+    console.log(`Socket connected: ${socket.id} (${user?.email ?? "unknown"})`);
 
-    socket.on('disconnect', () => {
+    socket.on("disconnect", () => {
       console.log(`Socket disconnected: ${socket.id}`);
     });
 
-    socket.on('join-canvas', async (canvasId: string) => {
+    socket.on("join-canvas", async (canvasId: string) => {
       if (!user || !canvasId) {
-        socket.emit('socket-error', { message: 'Canvas id is required' });
+        socket.emit("socket-error", { message: "Canvas id is required" });
         return;
       }
 
       try {
-        const canvas = await ensureCanvasAccess(canvasId, user as AuthenticatedUserLike);
+        const canvas = await ensureCanvasAccess(
+          canvasId,
+          user as AuthenticatedUserLike,
+        );
         socket.join(`canvas:${canvasId}`);
-        socket.emit('canvas-joined', {
+        socket.emit("canvas-joined", {
           canvasId,
           organizationId: canvas.organizationId,
         });
       } catch (error) {
-        socket.emit('socket-error', {
-          message: error instanceof Error ? error.message : 'Unable to join canvas',
+        socket.emit("socket-error", {
+          message:
+            error instanceof Error ? error.message : "Unable to join canvas",
         });
       }
     });
 
-    socket.on('leave-canvas', (canvasId: string) => {
+    socket.on("leave-canvas", (canvasId: string) => {
       socket.leave(`canvas:${canvasId}`);
     });
 
     socket.on(
-      'join-live-session',
-      async (payload: { canvasId: string; liveSessionId?: string; title?: string }) => {
+      "join-live-session",
+      async (payload: {
+        canvasId: string;
+        liveSessionId?: string;
+        title?: string;
+      }) => {
         if (!user || !payload?.canvasId) {
-          socket.emit('socket-error', { message: 'Canvas id is required' });
+          socket.emit("socket-error", { message: "Canvas id is required" });
           return;
         }
 
         try {
-          const canvas = await ensureCanvasAccess(payload.canvasId, user as AuthenticatedUserLike);
+          const canvas = await ensureCanvasAccess(
+            payload.canvasId,
+            user as AuthenticatedUserLike,
+          );
           let liveSession = payload.liveSessionId
             ? await prisma.liveSession.findFirst({
                 where: {
@@ -99,12 +126,19 @@ export const setupSockets = (httpServer: HttpServer): Server => {
             : null;
 
           if (!liveSession) {
+            if (!canHostSocketLiveSession(user.role)) {
+              socket.emit("socket-error", {
+                message: "Only teachers and admins can create live sessions",
+              });
+              return;
+            }
             liveSession = await prisma.liveSession.create({
               data: {
                 canvasId: payload.canvasId,
                 organizationId: canvas.organizationId,
                 title: payload.title ?? canvas.name,
                 createdById: user.userId,
+                hostUserId: user.userId,
               },
             });
           }
@@ -122,24 +156,27 @@ export const setupSockets = (httpServer: HttpServer): Server => {
             create: {
               liveSessionId: liveSession.id,
               userId: user.userId,
+              role: socketParticipantRole(user.role),
             },
           });
 
           socket.join(`live-session:${liveSession.id}`);
-          socket.emit('live-session-joined', {
+          socket.emit("live-session-joined", {
             liveSessionId: liveSession.id,
             canvasId: payload.canvasId,
           });
         } catch (error) {
-          socket.emit('socket-error', {
+          socket.emit("socket-error", {
             message:
-              error instanceof Error ? error.message : 'Unable to join live session',
+              error instanceof Error
+                ? error.message
+                : "Unable to join live session",
           });
         }
       },
     );
 
-    socket.on('leave-live-session', async (liveSessionId: string) => {
+    socket.on("leave-live-session", async (liveSessionId: string) => {
       if (!user || !liveSessionId) {
         return;
       }
@@ -159,10 +196,12 @@ export const setupSockets = (httpServer: HttpServer): Server => {
     });
 
     socket.on(
-      'live-session:join',
+      "live-session:join",
       async (payload: { liveSessionId: string }) => {
         if (!user || !payload?.liveSessionId) {
-          socket.emit('socket-error', { message: 'Live session id is required' });
+          socket.emit("socket-error", {
+            message: "Live session id is required",
+          });
           return;
         }
 
@@ -182,62 +221,73 @@ export const setupSockets = (httpServer: HttpServer): Server => {
             create: {
               liveSessionId: payload.liveSessionId,
               userId: user.userId,
-              role: user.role === 'STUDENT' ? 'STUDENT' : 'TEACHER',
+              role: socketParticipantRole(user.role),
             },
           });
           socket.join(`live-session:${payload.liveSessionId}`);
-          socket.emit('live-session:joined', {
+          socket.emit("live-session:joined", {
             liveSessionId: payload.liveSessionId,
             status: liveSession.status,
           });
-          socket.to(`live-session:${payload.liveSessionId}`).emit('presence:update', {
-            liveSessionId: payload.liveSessionId,
-            userId: user.userId,
-            email: user.email,
-            state: 'joined',
-          });
+          socket
+            .to(`live-session:${payload.liveSessionId}`)
+            .emit("presence:update", {
+              liveSessionId: payload.liveSessionId,
+              userId: user.userId,
+              email: user.email,
+              state: "joined",
+            });
         } catch (error) {
-          socket.emit('socket-error', {
+          socket.emit("socket-error", {
             message:
-              error instanceof Error ? error.message : 'Unable to join live session',
+              error instanceof Error
+                ? error.message
+                : "Unable to join live session",
           });
         }
       },
     );
 
-    socket.on('live-session:leave', async (payload: { liveSessionId: string }) => {
-      if (!user || !payload?.liveSessionId) {
-        return;
-      }
-      await prisma.liveSessionParticipant.updateMany({
-        where: {
-          liveSessionId: payload.liveSessionId,
-          userId: user.userId,
-          leftAt: null,
-        },
-        data: { leftAt: new Date() },
-      });
-      socket.leave(`live-session:${payload.liveSessionId}`);
-      socket.to(`live-session:${payload.liveSessionId}`).emit('presence:update', {
-        liveSessionId: payload.liveSessionId,
-        userId: user.userId,
-        email: user.email,
-        state: 'left',
-      });
-    });
+    socket.on(
+      "live-session:leave",
+      async (payload: { liveSessionId: string }) => {
+        if (!user || !payload?.liveSessionId) {
+          return;
+        }
+        await prisma.liveSessionParticipant.updateMany({
+          where: {
+            liveSessionId: payload.liveSessionId,
+            userId: user.userId,
+            leftAt: null,
+          },
+          data: { leftAt: new Date() },
+        });
+        socket.leave(`live-session:${payload.liveSessionId}`);
+        socket
+          .to(`live-session:${payload.liveSessionId}`)
+          .emit("presence:update", {
+            liveSessionId: payload.liveSessionId,
+            userId: user.userId,
+            email: user.email,
+            state: "left",
+          });
+      },
+    );
 
     socket.on(
-      'chat:send',
+      "chat:send",
       async (payload: {
         liveSessionId: string;
         body?: string;
-        type?: 'TEXT' | 'VOICE_NOTE' | 'MEDIA' | 'SYSTEM';
+        type?: "TEXT" | "VOICE_NOTE" | "MEDIA" | "SYSTEM";
         attachmentUrl?: string;
         attachmentName?: string;
         metadata?: Record<string, unknown>;
       }) => {
         if (!user || !payload?.liveSessionId) {
-          socket.emit('socket-error', { message: 'Live session id is required' });
+          socket.emit("socket-error", {
+            message: "Live session id is required",
+          });
           return;
         }
         try {
@@ -245,29 +295,33 @@ export const setupSockets = (httpServer: HttpServer): Server => {
             user as AuthenticatedUserLike,
             payload.liveSessionId,
             {
-              type: payload.type ?? 'TEXT',
+              type: payload.type ?? "TEXT",
               body: payload.body,
               attachmentUrl: payload.attachmentUrl,
               attachmentName: payload.attachmentName,
               metadata: payload.metadata,
             },
           );
-          io.to(`live-session:${payload.liveSessionId}`).emit('chat:message', message);
+          io.to(`live-session:${payload.liveSessionId}`).emit(
+            "chat:message",
+            message,
+          );
         } catch (error) {
-          socket.emit('socket-error', {
-            message: error instanceof Error ? error.message : 'Unable to send message',
+          socket.emit("socket-error", {
+            message:
+              error instanceof Error ? error.message : "Unable to send message",
           });
         }
       },
     );
 
     socket.on(
-      'chat:typing',
+      "chat:typing",
       (payload: { liveSessionId: string; isTyping: boolean }) => {
         if (!user || !payload?.liveSessionId) {
           return;
         }
-        socket.to(`live-session:${payload.liveSessionId}`).emit('chat:typing', {
+        socket.to(`live-session:${payload.liveSessionId}`).emit("chat:typing", {
           liveSessionId: payload.liveSessionId,
           userId: user.userId,
           email: user.email,
@@ -277,8 +331,12 @@ export const setupSockets = (httpServer: HttpServer): Server => {
     );
 
     socket.on(
-      'board:event',
-      async (payload: { liveSessionId: string; type: string; data?: Record<string, unknown> }) => {
+      "board:event",
+      async (payload: {
+        liveSessionId: string;
+        type: string;
+        data?: Record<string, unknown>;
+      }) => {
         if (!user || !payload?.liveSessionId || !payload.type) {
           return;
         }
@@ -289,22 +347,26 @@ export const setupSockets = (httpServer: HttpServer): Server => {
             `BOARD_${payload.type}`,
             payload.data,
           );
-          socket.to(`live-session:${payload.liveSessionId}`).emit('board:activity', {
-            liveSessionId: payload.liveSessionId,
-            actorUserId: user.userId,
-            type: payload.type,
-            data: payload.data,
-          });
+          socket
+            .to(`live-session:${payload.liveSessionId}`)
+            .emit("board:activity", {
+              liveSessionId: payload.liveSessionId,
+              actorUserId: user.userId,
+              type: payload.type,
+              data: payload.data,
+            });
         } catch (error) {
-          socket.emit('socket-error', {
+          socket.emit("socket-error", {
             message:
-              error instanceof Error ? error.message : 'Unable to sync board event',
+              error instanceof Error
+                ? error.message
+                : "Unable to sync board event",
           });
         }
       },
     );
 
-    socket.on('call:token', async (payload: { liveSessionId: string }) => {
+    socket.on("call:token", async (payload: { liveSessionId: string }) => {
       if (!user || !payload?.liveSessionId) {
         return;
       }
@@ -313,7 +375,7 @@ export const setupSockets = (httpServer: HttpServer): Server => {
           user as AuthenticatedUserLike,
           payload.liveSessionId,
         );
-        socket.emit('call:token', {
+        socket.emit("call:token", {
           liveSessionId: payload.liveSessionId,
           ...(await liveSessionService.createCallToken(
             user as AuthenticatedUserLike,
@@ -321,15 +383,17 @@ export const setupSockets = (httpServer: HttpServer): Server => {
           )),
         });
       } catch (error) {
-        socket.emit('socket-error', {
+        socket.emit("socket-error", {
           message:
-            error instanceof Error ? error.message : 'Unable to create call token',
+            error instanceof Error
+              ? error.message
+              : "Unable to create call token",
         });
       }
     });
 
     socket.on(
-      'screen-share:state',
+      "screen-share:state",
       async (payload: { liveSessionId: string; isSharing: boolean }) => {
         if (!user || !payload?.liveSessionId) {
           return;
@@ -338,25 +402,30 @@ export const setupSockets = (httpServer: HttpServer): Server => {
           await liveSessionService.writeEvent(
             payload.liveSessionId,
             user.userId,
-            'SCREEN_SHARE_STATE',
+            "SCREEN_SHARE_STATE",
             { isSharing: payload.isSharing },
           );
         } catch {
           // Presence-only screen-share state should still fan out.
         }
-        io.to(`live-session:${payload.liveSessionId}`).emit('screen-share:state', {
-          liveSessionId: payload.liveSessionId,
-          userId: user.userId,
-          isSharing: payload.isSharing,
-        });
+        io.to(`live-session:${payload.liveSessionId}`).emit(
+          "screen-share:state",
+          {
+            liveSessionId: payload.liveSessionId,
+            userId: user.userId,
+            isSharing: payload.isSharing,
+          },
+        );
       },
     );
 
     socket.on(
-      'hand:raise',
+      "hand:raise",
       async (payload: { liveSessionId: string; reason?: string }) => {
         if (!user || !payload?.liveSessionId) {
-          socket.emit('socket-error', { message: 'Live session id is required' });
+          socket.emit("socket-error", {
+            message: "Live session id is required",
+          });
           return;
         }
         try {
@@ -365,24 +434,30 @@ export const setupSockets = (httpServer: HttpServer): Server => {
             payload.liveSessionId,
             { reason: payload.reason },
           );
-          io.to(`live-session:${payload.liveSessionId}`).emit('hand:raised', event);
+          io.to(`live-session:${payload.liveSessionId}`).emit(
+            "hand:raised",
+            event,
+          );
         } catch (error) {
-          socket.emit('socket-error', {
-            message: error instanceof Error ? error.message : 'Unable to raise hand',
+          socket.emit("socket-error", {
+            message:
+              error instanceof Error ? error.message : "Unable to raise hand",
           });
         }
       },
     );
 
     socket.on(
-      'hand:resolve',
+      "hand:resolve",
       async (payload: {
         liveSessionId: string;
         eventId: string;
-        resolution?: 'ALLOWED' | 'DISMISSED';
+        resolution?: "ALLOWED" | "DISMISSED";
       }) => {
         if (!user || !payload?.liveSessionId || !payload.eventId) {
-          socket.emit('socket-error', { message: 'Live session id and event id are required' });
+          socket.emit("socket-error", {
+            message: "Live session id and event id are required",
+          });
           return;
         }
         try {
@@ -392,20 +467,29 @@ export const setupSockets = (httpServer: HttpServer): Server => {
             payload.eventId,
             { resolution: payload.resolution },
           );
-          io.to(`live-session:${payload.liveSessionId}`).emit('hand:resolved', event);
+          io.to(`live-session:${payload.liveSessionId}`).emit(
+            "hand:resolved",
+            event,
+          );
         } catch (error) {
-          socket.emit('socket-error', {
-            message: error instanceof Error ? error.message : 'Unable to resolve hand',
+          socket.emit("socket-error", {
+            message:
+              error instanceof Error ? error.message : "Unable to resolve hand",
           });
         }
       },
     );
 
     socket.on(
-      'controls:update',
-      async (payload: { liveSessionId: string; controls?: Record<string, unknown> }) => {
+      "controls:update",
+      async (payload: {
+        liveSessionId: string;
+        controls?: Record<string, unknown>;
+      }) => {
         if (!user || !payload?.liveSessionId) {
-          socket.emit('socket-error', { message: 'Live session id is required' });
+          socket.emit("socket-error", {
+            message: "Live session id is required",
+          });
           return;
         }
         try {
@@ -414,17 +498,23 @@ export const setupSockets = (httpServer: HttpServer): Server => {
             payload.liveSessionId,
             payload.controls ?? {},
           );
-          io.to(`live-session:${payload.liveSessionId}`).emit('controls:update', event);
+          io.to(`live-session:${payload.liveSessionId}`).emit(
+            "controls:update",
+            event,
+          );
         } catch (error) {
-          socket.emit('socket-error', {
-            message: error instanceof Error ? error.message : 'Unable to update controls',
+          socket.emit("socket-error", {
+            message:
+              error instanceof Error
+                ? error.message
+                : "Unable to update controls",
           });
         }
       },
     );
 
     socket.on(
-      'quiz:launch',
+      "quiz:launch",
       async (payload: {
         liveSessionId: string;
         question: string;
@@ -433,7 +523,9 @@ export const setupSockets = (httpServer: HttpServer): Server => {
         durationSeconds?: number;
       }) => {
         if (!user || !payload?.liveSessionId) {
-          socket.emit('socket-error', { message: 'Live session id is required' });
+          socket.emit("socket-error", {
+            message: "Live session id is required",
+          });
           return;
         }
         try {
@@ -447,20 +539,30 @@ export const setupSockets = (httpServer: HttpServer): Server => {
               durationSeconds: payload.durationSeconds,
             },
           );
-          io.to(`live-session:${payload.liveSessionId}`).emit('quiz:launched', event);
+          io.to(`live-session:${payload.liveSessionId}`).emit(
+            "quiz:launched",
+            event,
+          );
         } catch (error) {
-          socket.emit('socket-error', {
-            message: error instanceof Error ? error.message : 'Unable to launch quiz',
+          socket.emit("socket-error", {
+            message:
+              error instanceof Error ? error.message : "Unable to launch quiz",
           });
         }
       },
     );
 
     socket.on(
-      'quiz:answer',
-      async (payload: { liveSessionId: string; quizEventId: string; answer: string }) => {
+      "quiz:answer",
+      async (payload: {
+        liveSessionId: string;
+        quizEventId: string;
+        answer: string;
+      }) => {
         if (!user || !payload?.liveSessionId || !payload.quizEventId) {
-          socket.emit('socket-error', { message: 'Live session id and quiz id are required' });
+          socket.emit("socket-error", {
+            message: "Live session id and quiz id are required",
+          });
           return;
         }
         try {
@@ -470,17 +572,23 @@ export const setupSockets = (httpServer: HttpServer): Server => {
             payload.quizEventId,
             { answer: payload.answer },
           );
-          io.to(`live-session:${payload.liveSessionId}`).emit('quiz:answer', event);
+          io.to(`live-session:${payload.liveSessionId}`).emit(
+            "quiz:answer",
+            event,
+          );
         } catch (error) {
-          socket.emit('socket-error', {
-            message: error instanceof Error ? error.message : 'Unable to submit quiz answer',
+          socket.emit("socket-error", {
+            message:
+              error instanceof Error
+                ? error.message
+                : "Unable to submit quiz answer",
           });
         }
       },
     );
 
     socket.on(
-      'recording:started',
+      "recording:started",
       async (payload: { liveSessionId: string }) => {
         if (!user || !payload?.liveSessionId) {
           return;
@@ -488,17 +596,20 @@ export const setupSockets = (httpServer: HttpServer): Server => {
         await liveSessionService.writeEvent(
           payload.liveSessionId,
           user.userId,
-          'RECORDING_STARTED',
+          "RECORDING_STARTED",
         );
-        io.to(`live-session:${payload.liveSessionId}`).emit('recording:started', {
-          liveSessionId: payload.liveSessionId,
-          userId: user.userId,
-        });
+        io.to(`live-session:${payload.liveSessionId}`).emit(
+          "recording:started",
+          {
+            liveSessionId: payload.liveSessionId,
+            userId: user.userId,
+          },
+        );
       },
     );
 
     socket.on(
-      'recording:stopped',
+      "recording:stopped",
       async (payload: { liveSessionId: string }) => {
         if (!user || !payload?.liveSessionId) {
           return;
@@ -506,12 +617,15 @@ export const setupSockets = (httpServer: HttpServer): Server => {
         await liveSessionService.writeEvent(
           payload.liveSessionId,
           user.userId,
-          'RECORDING_STOPPED',
+          "RECORDING_STOPPED",
         );
-        io.to(`live-session:${payload.liveSessionId}`).emit('recording:stopped', {
-          liveSessionId: payload.liveSessionId,
-          userId: user.userId,
-        });
+        io.to(`live-session:${payload.liveSessionId}`).emit(
+          "recording:stopped",
+          {
+            liveSessionId: payload.liveSessionId,
+            userId: user.userId,
+          },
+        );
       },
     );
   });

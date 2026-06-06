@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 
-import { authMiddleware } from '@/shared/middleware/auth.middleware';
+import { authMiddleware, optionalAuthMiddleware } from '@/shared/middleware/auth.middleware';
 import { validate } from '@/shared/middleware/validation.middleware';
 import { ApiResponse } from '@/shared/utils/api-response';
 import { licensingService } from './licensing.service';
@@ -35,7 +35,7 @@ const hardwareVerifySchema = z.object({
 });
 
 // Public — Flutter calls this on every cold launch to confirm the device is still bound.
-router.post('/hardware/verify', validate(hardwareVerifySchema), async (req, res, next) => {
+router.post('/hardware/verify', optionalAuthMiddleware, validate(hardwareVerifySchema), async (req, res, next) => {
   try {
     const result = await licensingService.verifyHardwareActivation({
       activationKey: req.body.activationKey,

@@ -1,7 +1,10 @@
 import { Router } from 'express';
 import { authController } from './auth.controller';
 import { validate } from '@/shared/middleware/validation.middleware';
-import { authMiddleware } from '@/shared/middleware/auth.middleware';
+import {
+  authMiddleware,
+  authMiddlewareAllowMissingClientSession,
+} from '@/shared/middleware/auth.middleware';
 import {
   adminLoginSchema,
   changePasswordSchema,
@@ -10,6 +13,7 @@ import {
   passwordResetRequestSchema,
   passwordSetupTokenSchema,
   refreshTokenSchema,
+  sessionHeartbeatSchema,
   sendOtpSchema,
   verifyOtpSchema,
 } from './auth.validator';
@@ -100,6 +104,7 @@ router.post('/verify-otp', authRateLimiter, validate(verifyOtpSchema), authContr
  *         description: Account not authorized for admin panel access
  */
 router.post('/admin/login', authRateLimiter, validate(adminLoginSchema), authController.adminLogin);
+router.post('/portal/login', authRateLimiter, validate(adminLoginSchema), authController.portalLogin);
 
 router.post(
   '/admin/password-setup/validate',
@@ -175,6 +180,19 @@ router.get(
  *     tags: [Auth]
  */
 router.post('/refresh', validate(refreshTokenSchema), authController.refreshToken);
+
+router.get(
+  '/sessions',
+  authMiddlewareAllowMissingClientSession,
+  authController.listSessions,
+);
+router.post(
+  '/sessions/heartbeat',
+  authMiddlewareAllowMissingClientSession,
+  validate(sessionHeartbeatSchema),
+  authController.heartbeatSession,
+);
+router.delete('/sessions/:id', authMiddleware, authController.revokeSession);
 
 /**
  * @swagger

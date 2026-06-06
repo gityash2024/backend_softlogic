@@ -1,16 +1,21 @@
-import { LiveSessionMediaKind, LiveSessionStatus, UserRole } from '@prisma/client';
+import {
+  LiveSessionMediaKind,
+  LiveSessionStatus,
+  UserRole,
+} from "@prisma/client";
 
-import { prisma } from '@/config';
-import { liveSessionService } from '@/modules/live-sessions/live-session.service';
+import { prisma } from "@/config";
+import { liveSessionService } from "@/modules/live-sessions/live-session.service";
 
-jest.mock('@/config', () => ({
+jest.mock("@/config", () => ({
   env: {
-    PUBLIC_APP_URL: 'https://app.example.com',
-    PUBLIC_DOWNLOAD_PAGE_URL: 'https://app.example.com/download',
-    JWT_ACCESS_SECRET: 'test_access_secret_minimum_32_chars',
-    JWT_REFRESH_SECRET: 'test_refresh_secret_minimum_32_chars',
-    JWT_ACCESS_EXPIRES_IN: '15m',
-    JWT_REFRESH_EXPIRES_IN: '7d',
+    PUBLIC_ADMIN_URL: "https://admin.example.com",
+    PUBLIC_APP_URL: "https://app.example.com",
+    PUBLIC_DOWNLOAD_PAGE_URL: "https://app.example.com/download",
+    JWT_ACCESS_SECRET: "test_access_secret_minimum_32_chars",
+    JWT_REFRESH_SECRET: "test_refresh_secret_minimum_32_chars",
+    JWT_ACCESS_EXPIRES_IN: "15m",
+    JWT_REFRESH_EXPIRES_IN: "7d",
   },
   prisma: {
     liveSession: {
@@ -35,6 +40,13 @@ jest.mock('@/config', () => ({
     organizationMembership: {
       upsert: jest.fn(),
     },
+    organization: {
+      findUnique: jest.fn(),
+    },
+    otp: {
+      updateMany: jest.fn(),
+      create: jest.fn(),
+    },
     user: {
       findUnique: jest.fn(),
       upsert: jest.fn(),
@@ -42,14 +54,19 @@ jest.mock('@/config', () => ({
   },
 }));
 
-jest.mock('@/shared/utils/email', () => ({
+jest.mock("@/shared/utils/email", () => ({
   getBrandLogoEmailAttachments: jest.fn(() => []),
-  getLiveSessionInviteEmailHtml: jest.fn(() => '<p>invite</p>'),
+  getLiveSessionInviteEmailHtml: jest.fn(() => "<p>invite</p>"),
   sendEmail: jest.fn(),
+  sendPasswordSetupEmail: jest.fn(),
   sendWelcomeEmail: jest.fn(),
 }));
 
-import { sendEmail, sendWelcomeEmail } from '@/shared/utils/email';
+import {
+  sendEmail,
+  sendPasswordSetupEmail,
+  sendWelcomeEmail,
+} from "@/shared/utils/email";
 
 const mockedPrisma = prisma as unknown as {
   liveSession: {
@@ -74,52 +91,64 @@ const mockedPrisma = prisma as unknown as {
   organizationMembership: {
     upsert: jest.Mock;
   };
+  organization: {
+    findUnique: jest.Mock;
+  };
+  otp: {
+    updateMany: jest.Mock;
+    create: jest.Mock;
+  };
   user: {
     findUnique: jest.Mock;
     upsert: jest.Mock;
   };
 };
 
-describe('LiveSessionService permissions', () => {
+describe("LiveSessionService permissions", () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    mockedPrisma.organization.findUnique.mockResolvedValue(null);
+    mockedPrisma.otp.updateMany.mockResolvedValue({ count: 0 });
+    mockedPrisma.otp.create.mockResolvedValue({ id: "otp-1" });
   });
 
-  it('prevents students from creating live sessions', async () => {
+  it("prevents students from creating live sessions", async () => {
     await expect(
       liveSessionService.createSession(
-        { userId: 'student-1', role: UserRole.STUDENT },
-        { canvasId: 'canvas-1', title: 'Class' },
+        { userId: "student-1", role: UserRole.STUDENT },
+        { canvasId: "canvas-1", title: "Class" },
       ),
     ).rejects.toMatchObject({ statusCode: 403 });
   });
 
-  it('prevents students from uploading media even with session access', async () => {
+  it("prevents students from uploading media even with session access", async () => {
     mockedPrisma.liveSession.findUnique.mockResolvedValue({
-      id: 'live-1',
-      createdById: 'teacher-1',
-      hostUserId: 'teacher-1',
-      participants: [{ userId: 'student-1' }],
+      id: "live-1",
+      createdById: "teacher-1",
+      hostUserId: "teacher-1",
+      participants: [{ userId: "student-1" }],
       invites: [],
     });
 
     await expect(
       liveSessionService.createMediaAsset(
-        { userId: 'student-1', role: UserRole.STUDENT },
-        'live-1',
+        { userId: "student-1", role: UserRole.STUDENT },
+        "live-1",
         {
           kind: LiveSessionMediaKind.FILE,
-          publicUrl: 'https://example.com/file.pdf',
+          publicUrl: "https://example.com/file.pdf",
         },
       ),
     ).rejects.toMatchObject({ statusCode: 403 });
   });
 
-  it('queries only active unused join codes', async () => {
+  it("queries only active unused join codes", async () => {
     mockedPrisma.liveSession.findFirst.mockResolvedValue(null);
     mockedPrisma.liveSessionInvite.findFirst.mockResolvedValue(null);
 
-    await expect(liveSessionService.verifyJoinCode('ABC123')).rejects.toMatchObject({
+    await expect(
+      liveSessionService.verifyJoinCode("ABC123"),
+    ).rejects.toMatchObject({
       statusCode: 404,
     });
 
@@ -133,50 +162,113 @@ describe('LiveSessionService permissions', () => {
     );
   });
 
-  it('lists only teacher-owned live sessions for teacher users', async () => {
+  it("lists only teacher-owned live sessions for teacher users", async () => {
     mockedPrisma.liveSession.findMany.mockResolvedValue([]);
 
     await liveSessionService.listSessions(
-      { userId: 'teacher-1', role: UserRole.TEACHER },
+      { userId: "teacher-1", role: UserRole.TEACHER },
       { status: LiveSessionStatus.LIVE },
     );
 
     expect(mockedPrisma.liveSession.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({
-          status: 'LIVE',
-          OR: [{ createdById: 'teacher-1' }, { hostUserId: 'teacher-1' }],
+          status: "LIVE",
+          OR: [
+            { createdById: "teacher-1" },
+            { hostUserId: "teacher-1" },
+            { canvas: { userId: "teacher-1" } },
+          ],
         }),
       }),
     );
   });
 
-  it('generates a reusable session-wide join code for teachers', async () => {
+  it("backfills legacy live session host and organization when a teacher starts it", async () => {
+    mockedPrisma.liveSession.findUnique
+      .mockResolvedValueOnce({
+        id: "live-1",
+        createdById: "teacher-1",
+        hostUserId: null,
+        organizationId: null,
+        canvas: { userId: "teacher-1", organizationId: "org-1" },
+      })
+      .mockResolvedValueOnce({
+        hostUserId: null,
+        organizationId: null,
+        canvas: { organizationId: "org-1" },
+      });
+    mockedPrisma.liveSession.update.mockResolvedValue({
+      id: "live-1",
+      status: LiveSessionStatus.LIVE,
+    });
+    mockedPrisma.liveSessionEvent.create.mockResolvedValue({});
+
+    await liveSessionService.startSession(
+      { userId: "teacher-1", role: UserRole.TEACHER },
+      "live-1",
+    );
+
+    expect(mockedPrisma.liveSession.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: "live-1" },
+        data: expect.objectContaining({
+          status: LiveSessionStatus.LIVE,
+          hostUserId: "teacher-1",
+          organizationId: "org-1",
+        }),
+      }),
+    );
+  });
+
+  it("lists only joined live sessions for student users", async () => {
+    mockedPrisma.liveSession.findMany.mockResolvedValue([]);
+
+    await liveSessionService.listSessions(
+      {
+        userId: "student-1",
+        email: "student@example.com",
+        role: UserRole.STUDENT,
+      },
+      { status: LiveSessionStatus.LIVE },
+    );
+
+    expect(mockedPrisma.liveSession.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          status: "LIVE",
+          OR: [{ participants: { some: { userId: "student-1" } } }],
+        }),
+      }),
+    );
+  });
+
+  it("generates a reusable session-wide join code for teachers", async () => {
     mockedPrisma.liveSession.findUnique.mockResolvedValue({
-      id: 'live-1',
-      canvasId: 'canvas-1',
-      organizationId: 'org-1',
-      title: 'Math Class',
-      createdById: 'teacher-1',
-      hostUserId: 'teacher-1',
+      id: "live-1",
+      canvasId: "canvas-1",
+      organizationId: "org-1",
+      title: "Math Class",
+      createdById: "teacher-1",
+      hostUserId: "teacher-1",
       createdBy: {
-        email: 'teacher@example.com',
-        name: 'Teacher Demo',
+        email: "teacher@example.com",
+        name: "Teacher Demo",
       },
     });
     mockedPrisma.liveSession.update.mockResolvedValue({});
     mockedPrisma.liveSessionEvent.create.mockResolvedValue({});
 
     const result = await liveSessionService.generateSessionJoinCode(
-      { userId: 'teacher-1', role: UserRole.TEACHER },
-      'live-1',
+      { userId: "teacher-1", role: UserRole.TEACHER },
+      "live-1",
       { expiresInMinutes: 15 },
     );
 
     expect(result.code).toMatch(/^[A-F0-9]{6}$/);
     expect(mockedPrisma.liveSession.update).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { id: 'live-1' },
+        where: { id: "live-1" },
         data: expect.objectContaining({
           joinCodeHash: expect.any(String),
           joinCodeExpiresAt: expect.any(Date),
@@ -185,88 +277,94 @@ describe('LiveSessionService permissions', () => {
     );
   });
 
-  it('sends welcome email once when a live-session invite creates a user', async () => {
+  it("sends password setup email once when a live-session invite creates a user and student login is enabled", async () => {
     mockedPrisma.liveSession.findUnique.mockResolvedValue({
-      id: 'live-1',
-      organizationId: 'org-1',
-      title: 'Math Class',
-      createdById: 'teacher-1',
-      hostUserId: 'teacher-1',
+      id: "live-1",
+      organizationId: "org-1",
+      title: "Math Class",
+      createdById: "teacher-1",
+      hostUserId: "teacher-1",
       createdBy: {
-        email: 'teacher@example.com',
-        name: 'Teacher Demo',
+        email: "teacher@example.com",
+        name: "Teacher Demo",
       },
     });
     mockedPrisma.user.findUnique.mockResolvedValue(null);
     mockedPrisma.user.upsert.mockResolvedValue({
-      id: 'student-1',
-      email: 'student@example.com',
-      name: 'student',
+      id: "student-1",
+      email: "student@example.com",
+      name: "student",
       role: UserRole.STUDENT,
+    });
+    mockedPrisma.organization.findUnique.mockResolvedValue({
+      name: "SoftLogic Academy",
+      studentLoginEnabled: true,
     });
     mockedPrisma.organizationMembership.upsert.mockResolvedValue({});
     mockedPrisma.liveSessionInvite.create.mockResolvedValue({
-      id: 'invite-1',
-      email: 'student@example.com',
-      codeExpiresAt: new Date('2026-04-28T12:00:00.000Z'),
-      downloadPageUrl: 'https://app.example.com/download',
+      id: "invite-1",
+      email: "student@example.com",
+      codeExpiresAt: new Date("2026-04-28T12:00:00.000Z"),
+      downloadPageUrl: "https://app.example.com/download",
     });
     mockedPrisma.liveSessionEvent.create.mockResolvedValue({});
 
     await liveSessionService.inviteStudent(
-      { userId: 'teacher-1', role: UserRole.TEACHER },
-      'live-1',
+      { userId: "teacher-1", role: UserRole.TEACHER },
+      "live-1",
       {
-        email: 'student@example.com',
+        email: "student@example.com",
         expiresInMinutes: 15,
       },
     );
 
-    expect(sendWelcomeEmail).toHaveBeenCalledTimes(1);
-    expect(sendWelcomeEmail).toHaveBeenCalledWith(
+    expect(sendWelcomeEmail).not.toHaveBeenCalled();
+    expect(sendPasswordSetupEmail).toHaveBeenCalledTimes(1);
+    expect(sendPasswordSetupEmail).toHaveBeenCalledWith(
       expect.objectContaining({
-        to: 'student@example.com',
-        name: 'student',
+        to: "student@example.com",
+        name: "student",
         role: UserRole.STUDENT,
-        inviterName: 'Teacher Demo',
+        organizationName: "SoftLogic Academy",
+        setupUrl: expect.stringContaining("/setup-password?token="),
       }),
     );
     expect(sendEmail).toHaveBeenCalledTimes(1);
   });
 
-  it('does not send a welcome email when a live-session invite updates an existing user', async () => {
+  it("does not send a welcome email when a live-session invite updates an existing user", async () => {
     mockedPrisma.liveSession.findUnique.mockResolvedValue({
-      id: 'live-1',
-      organizationId: 'org-1',
-      title: 'Math Class',
-      createdById: 'teacher-1',
-      hostUserId: 'teacher-1',
+      id: "live-1",
+      organizationId: "org-1",
+      title: "Math Class",
+      createdById: "teacher-1",
+      hostUserId: "teacher-1",
       createdBy: {
-        email: 'teacher@example.com',
-        name: 'Teacher Demo',
+        email: "teacher@example.com",
+        name: "Teacher Demo",
       },
     });
-    mockedPrisma.user.findUnique.mockResolvedValue({ id: 'student-1' });
+    mockedPrisma.user.findUnique.mockResolvedValue({ id: "student-1" });
     mockedPrisma.user.upsert.mockResolvedValue({
-      id: 'student-1',
-      email: 'student@example.com',
-      name: 'Student Demo',
+      id: "student-1",
+      email: "student@example.com",
+      name: "Student Demo",
       role: UserRole.STUDENT,
     });
     mockedPrisma.organizationMembership.upsert.mockResolvedValue({});
     mockedPrisma.liveSessionInvite.create.mockResolvedValue({
-      id: 'invite-1',
-      email: 'student@example.com',
-      codeExpiresAt: new Date('2026-04-28T12:00:00.000Z'),
-      downloadPageUrl: 'https://app.example.com/download',
+      id: "invite-1",
+      email: "student@example.com",
+      codeExpiresAt: new Date("2026-04-28T12:00:00.000Z"),
+      downloadPageUrl: "https://app.example.com/download",
     });
     mockedPrisma.liveSessionEvent.create.mockResolvedValue({});
 
     await liveSessionService.inviteStudent(
-      { userId: 'teacher-1', role: UserRole.TEACHER },
-      'live-1',
+      { userId: "teacher-1", role: UserRole.TEACHER },
+      "live-1",
       {
-        email: 'student@example.com',
+        email: "student@example.com",
         expiresInMinutes: 15,
       },
     );

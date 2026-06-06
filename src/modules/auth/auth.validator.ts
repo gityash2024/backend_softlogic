@@ -60,6 +60,11 @@ export const refreshTokenSchema = z.object({
   refreshToken: z.string().min(1, 'Refresh token is required'),
 });
 
+export const sessionHeartbeatSchema = z.object({
+  refreshToken: z.string().min(1).optional(),
+  clientSessionId: z.string().trim().min(8).max(128).optional(),
+});
+
 export const adminLoginSchema = z.object({
   email: authEmailSchema,
   password: z.string().min(1, 'Password is required'),
@@ -67,7 +72,7 @@ export const adminLoginSchema = z.object({
 
 export const strongPasswordSchema = z
   .string()
-  .min(12, 'Password must be at least 12 characters')
+  .min(1, 'Password is required')
   .regex(/[A-Za-z]/, 'Include at least one letter')
   .regex(/[0-9]/, 'Include at least one number');
 
@@ -92,6 +97,7 @@ export type SendOtpInput = z.infer<typeof sendOtpSchema>;
 export type VerifyOtpInput = z.infer<typeof verifyOtpSchema>;
 export type GoogleSignInInput = z.infer<typeof googleSignInSchema>;
 export type RefreshTokenInput = z.infer<typeof refreshTokenSchema>;
+export type SessionHeartbeatInput = z.infer<typeof sessionHeartbeatSchema>;
 export type AdminLoginInput = z.infer<typeof adminLoginSchema>;
 export type PasswordSetupTokenInput = z.infer<typeof passwordSetupTokenSchema>;
 export type CompletePasswordSetupInput = z.infer<typeof completePasswordSetupSchema>;

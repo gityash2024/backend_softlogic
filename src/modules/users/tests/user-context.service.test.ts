@@ -46,6 +46,7 @@ describe('toSafeUserContext organization AI settings', () => {
       buildUserContextRecord({
         ai: {
           geminiApiKey: 'gemini-key',
+          geminiApiKeys: ['gemini-key', 'gemini-key-2'],
           geminiTextModel: 'gemini-2.5-flash',
           geminiImageModel: 'imagen-4.0-generate-001',
           geminiTtsModel: 'gemini-2.5-flash-preview-tts',
@@ -56,6 +57,7 @@ describe('toSafeUserContext organization AI settings', () => {
 
     expect(context.primaryOrganization?.aiSettings).toMatchObject({
       geminiApiKey: 'gemini-key',
+      geminiApiKeys: ['gemini-key', 'gemini-key-2'],
       geminiTextModel: 'gemini-2.5-flash',
       geminiImageModel: 'imagen-4.0-generate-001',
       geminiTtsModel: 'gemini-2.5-flash-preview-tts',
@@ -78,10 +80,17 @@ describe('toSafeUserContext organization AI settings', () => {
 
     expect(context.primaryOrganization?.aiSettings).toMatchObject({
       geminiApiKey: 'legacy-key',
+      geminiApiKeys: ['legacy-key'],
       geminiTextModel: 'gemini-2.0-flash',
       geminiImageModel: 'gemini-2.5-flash-image',
       geminiTtsModel: 'gemini-2.5-pro-preview-tts',
       deepgramApiKey: 'legacy-deepgram',
     });
+  });
+
+  it('returns null when AI settings are empty', () => {
+    const context = toSafeUserContext(buildUserContextRecord({ ai: {} }));
+
+    expect(context.primaryOrganization?.aiSettings).toBeNull();
   });
 });

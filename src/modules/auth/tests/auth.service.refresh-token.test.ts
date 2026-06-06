@@ -19,7 +19,9 @@ jest.mock('@/modules/auth/auth.repository', () => ({
     createSession: jest.fn(),
     deleteSession: jest.fn(),
     findSessionByToken: jest.fn(),
+    findUserSessionByClientSessionId: jest.fn(),
     findUserById: jest.fn(),
+    updateSession: jest.fn(),
   },
 }));
 
@@ -83,15 +85,20 @@ describe('AuthService refresh token', () => {
       avatar: null,
     } as any);
     mockedAuthRepository.createSession.mockResolvedValue({} as any);
+    mockedAuthRepository.findUserSessionByClientSessionId.mockResolvedValue(null);
+    mockedAuthRepository.updateSession.mockResolvedValue({} as any);
   });
 
   it('keeps the session alive in testing mode even when the refresh JWT is invalid', async () => {
-    mockedAuthRepository.findSessionByToken.mockResolvedValue({
-      id: 'session-1',
-      userId: 'user-1',
-      refreshToken: 'expired-refresh-token',
-      expiresAt: new Date('2026-01-01T00:00:00.000Z'),
-    } as any);
+    mockedAuthRepository.findSessionByToken.mockImplementation(async (token) => {
+      if (token !== 'expired-refresh-token') return null;
+      return {
+        id: 'session-1',
+        userId: 'user-1',
+        refreshToken: 'expired-refresh-token',
+        expiresAt: new Date('2026-01-01T00:00:00.000Z'),
+      } as any;
+    });
     mockedVerifyRefreshToken.mockImplementation(() => {
       throw new Error('jwt expired');
     });
@@ -100,11 +107,12 @@ describe('AuthService refresh token', () => {
 
     expect(result.tokens.accessToken).toBe('new-access-token');
     expect(mockedAuthRepository.findUserById).toHaveBeenCalledWith('user-1');
-    expect(mockedAuthRepository.deleteSession).toHaveBeenCalledWith('session-1');
-    expect(mockedAuthRepository.createSession).toHaveBeenCalledWith(
+    expect(mockedAuthRepository.deleteSession).not.toHaveBeenCalled();
+    expect(mockedAuthRepository.createSession).not.toHaveBeenCalled();
+    expect(mockedAuthRepository.updateSession).toHaveBeenCalledWith(
+      'session-1',
       expect.objectContaining({
         refreshToken: 'new-refresh-token',
-        userId: 'user-1',
       }),
     );
   });
@@ -122,6 +130,39 @@ describe('AuthService refresh token', () => {
       statusCode: 401,
     });
 
+    expect(mockedAuthRepository.createSession).not.toHaveBeenCalled();
+  });
+
+  it('rejects refresh when the supplied client session was revoked', async () => {
+    mockedAuthRepository.findSessionByToken.mockResolvedValue({
+      id: 'session-1',
+      userId: 'user-1',
+      refreshToken: 'refresh-token',
+      clientSessionId: 'web-session-1',
+      expiresAt: new Date('2026-06-12T00:00:00.000Z'),
+    } as any);
+    mockedAuthRepository.findUserSessionByClientSessionId.mockResolvedValue({
+      id: 'session-1',
+      userId: 'user-1',
+      refreshToken: null,
+      clientSessionId: 'web-session-1',
+      revokedAt: new Date('2026-06-05T00:00:00.000Z'),
+      expiresAt: new Date('2026-06-12T00:00:00.000Z'),
+    } as any);
+
+    await expect(
+      authService.refreshToken(
+        'refresh-token',
+        undefined,
+        undefined,
+        'web-session-1',
+      ),
+    ).rejects.toMatchObject({
+      message: 'Invalid token',
+      statusCode: 401,
+    });
+
+    expect(mockedAuthRepository.updateSession).not.toHaveBeenCalled();
     expect(mockedAuthRepository.createSession).not.toHaveBeenCalled();
   });
 });

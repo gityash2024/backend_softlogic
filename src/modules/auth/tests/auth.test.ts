@@ -7,6 +7,8 @@ jest.mock('@/modules/auth/auth.service', () => ({
   authService: {
     sendOtp: jest.fn(),
     verifyOtp: jest.fn(),
+    adminLogin: jest.fn(),
+    portalLogin: jest.fn(),
     googleSignIn: jest.fn(),
     startDesktopGoogleSignIn: jest.fn(),
     handleDesktopGoogleCallback: jest.fn(),
@@ -14,6 +16,7 @@ jest.mock('@/modules/auth/auth.service', () => ({
     refreshToken: jest.fn(),
     logout: jest.fn(),
     resendOtp: jest.fn(),
+    completePasswordSetup: jest.fn(),
   },
 }));
 
@@ -99,7 +102,57 @@ describe('Auth Module', () => {
         'admin@softlogicwhiteboard.com',
         '1234',
         expect.any(String),
+        expect.objectContaining({ clientType: 'unknown' }),
+        null,
       );
+    });
+  });
+
+  describe('POST /auth/admin/login', () => {
+    it('normalizes email and calls the admin password login path', async () => {
+      mockedAuthService.adminLogin.mockResolvedValue({
+        user: { id: 'admin-1', role: 'SUPER_ADMIN' },
+        tokens: { accessToken: 'access', refreshToken: 'refresh' },
+      } as never);
+
+      const response = await request(app)
+        .post('/api/v1/auth/admin/login')
+        .send({ email: '  Admin@SoftlogicWhiteboard.com ', password: 'pass1234' });
+
+      expect(response.status).toBe(200);
+      expect(response.body.success).toBe(true);
+      expect(mockedAuthService.adminLogin).toHaveBeenCalledWith(
+        'admin@softlogicwhiteboard.com',
+        'pass1234',
+        expect.any(String),
+        expect.objectContaining({ clientType: 'unknown' }),
+        null,
+      );
+      expect(mockedAuthService.portalLogin).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('POST /auth/portal/login', () => {
+    it('normalizes email and calls the teacher/student/parent password login path', async () => {
+      mockedAuthService.portalLogin.mockResolvedValue({
+        user: { id: 'teacher-1', role: 'TEACHER' },
+        tokens: { accessToken: 'access', refreshToken: 'refresh' },
+      } as never);
+
+      const response = await request(app)
+        .post('/api/v1/auth/portal/login')
+        .send({ email: '  Teacher@SoftlogicWhiteboard.com ', password: 'pass1234' });
+
+      expect(response.status).toBe(200);
+      expect(response.body.success).toBe(true);
+      expect(mockedAuthService.portalLogin).toHaveBeenCalledWith(
+        'teacher@softlogicwhiteboard.com',
+        'pass1234',
+        expect.any(String),
+        expect.objectContaining({ clientType: 'unknown' }),
+        null,
+      );
+      expect(mockedAuthService.adminLogin).not.toHaveBeenCalled();
     });
   });
 
@@ -160,6 +213,48 @@ describe('Auth Module', () => {
           state: 'state-1',
         }),
       );
+    });
+  });
+
+  describe('POST /auth/admin/password-setup/complete', () => {
+    it('accepts a short password when it includes a letter and a number', async () => {
+      mockedAuthService.completePasswordSetup.mockResolvedValue({
+        email: 'teacher@softlogicwhiteboard.com',
+        message: 'Password set successfully',
+      });
+
+      const response = await request(app)
+        .post('/api/v1/auth/admin/password-setup/complete')
+        .send({
+          token: 'token-with-at-least-twenty-chars',
+          password: 'a1',
+        });
+
+      expect(response.status).toBe(200);
+      expect(response.body.success).toBe(true);
+      expect(mockedAuthService.completePasswordSetup).toHaveBeenCalledWith(
+        {
+          token: 'token-with-at-least-twenty-chars',
+          password: 'a1',
+        },
+        expect.any(String),
+      );
+    });
+
+    it('still rejects a password without a number', async () => {
+      const response = await request(app)
+        .post('/api/v1/auth/admin/password-setup/complete')
+        .send({
+          token: 'token-with-at-least-twenty-chars',
+          password: 'abcdef',
+        });
+
+      expect(response.status).toBe(400);
+      expect(response.body.success).toBe(false);
+      expect(response.body.errors).toEqual({
+        password: ['Include at least one number'],
+      });
+      expect(mockedAuthService.completePasswordSetup).not.toHaveBeenCalled();
     });
   });
 });

@@ -69,6 +69,7 @@ export interface OrganizationSummary {
 
 export interface OrganizationAiSettings {
   geminiApiKey: string;
+  geminiApiKeys: string[];
   geminiTextModel: string;
   geminiImageModel: string;
   geminiTtsModel: string;
@@ -118,13 +119,36 @@ const aiSettingString = (
       (legacyKey ? root[legacyKey] : undefined),
   );
 
+const aiSettingStringArray = (
+  ai: Record<string, unknown>,
+  root: Record<string, unknown>,
+  canonicalKey: string,
+  fallbackValue: string,
+): string[] => {
+  const raw = ai[canonicalKey] ?? root[canonicalKey];
+  if (Array.isArray(raw)) {
+    const keys = raw
+      .map((value) => asString(value).trim())
+      .filter((value) => value.length > 0);
+    return Array.from(new Set(keys));
+  }
+  return fallbackValue.trim().length > 0 ? [fallbackValue.trim()] : [];
+};
+
 const toOrganizationAiSettings = (
   settings: Prisma.JsonValue | null | undefined,
 ): OrganizationAiSettings | null => {
   const root = asJsonObject(settings);
   const ai = asJsonObject(root.ai as Prisma.JsonValue | null | undefined);
+  const geminiApiKey = aiSettingString(ai, root, 'geminiApiKey');
   const summary = {
-    geminiApiKey: aiSettingString(ai, root, 'geminiApiKey'),
+    geminiApiKey,
+    geminiApiKeys: aiSettingStringArray(
+      ai,
+      root,
+      'geminiApiKeys',
+      geminiApiKey,
+    ),
     geminiTextModel: aiSettingString(
       ai,
       root,
@@ -146,7 +170,15 @@ const toOrganizationAiSettings = (
     deepgramApiKey: aiSettingString(ai, root, 'deepgramApiKey'),
   };
 
-  return Object.values(summary).some((value) => value.trim().length > 0)
+  const hasSettings =
+    summary.geminiApiKeys.length > 0 ||
+    summary.geminiApiKey.trim().length > 0 ||
+    summary.geminiTextModel.trim().length > 0 ||
+    summary.geminiImageModel.trim().length > 0 ||
+    summary.geminiTtsModel.trim().length > 0 ||
+    summary.deepgramApiKey.trim().length > 0;
+
+  return hasSettings
     ? summary
     : null;
 };

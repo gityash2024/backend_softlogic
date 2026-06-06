@@ -67,6 +67,7 @@ interface PasswordResetEmailOptions {
 interface PasswordChangedEmailOptions {
   readonly to: string;
   readonly name?: string | null;
+  readonly role?: string | null;
 }
 
 interface ForcedLogoutEmailOptions {
@@ -423,6 +424,150 @@ const formatRoleLabel = (role?: string | null): string => {
 
 const trimTrailingSlash = (value: string): string => value.replace(/\/+$/, '');
 
+type PasswordEmailMode = 'setup' | 'reset' | 'changed';
+
+interface PasswordEmailCopy {
+  readonly accountLabel: string;
+  readonly preheader: string;
+  readonly eyebrow: string;
+  readonly heroTitle: string;
+  readonly heroCopy: string;
+  readonly introNoun: string;
+  readonly signInTarget: string;
+  readonly inviteFallback: string;
+  readonly setupSubject: string;
+  readonly setupCta: string;
+  readonly resetSubject: string;
+  readonly changedSubject: string;
+}
+
+const isAdminPasswordRole = (role?: string | null): boolean =>
+  ['SUPER_ADMIN', 'PARTNER_ADMIN', 'CUSTOMER_ADMIN', 'ADMIN'].includes(
+    role?.trim().toUpperCase() ?? '',
+  );
+
+const passwordEmailCopyForRole = (
+  role?: string | null,
+  mode: PasswordEmailMode = 'setup',
+): PasswordEmailCopy => {
+  const normalizedRole = role?.trim().toUpperCase();
+  if (normalizedRole === 'TEACHER') {
+    return {
+      accountLabel: 'teacher',
+      preheader:
+        mode === 'setup'
+          ? 'Your SoftLogic teaching workspace is ready. Set your password to continue.'
+          : 'A password update was requested for your SoftLogic teacher account.',
+      eyebrow: 'SoftLogic teacher access',
+      heroTitle:
+        mode === 'changed'
+          ? 'Your teacher password was changed.'
+          : mode === 'reset'
+          ? 'Reset your teacher password.'
+          : 'Your teaching workspace is ready.',
+      heroCopy:
+        mode === 'changed'
+          ? 'This is a confirmation that your SoftLogic teacher password was updated.'
+          : mode === 'reset'
+          ? 'Choose a new password to keep managing your boards, live sessions, and student invites.'
+          : 'Set your password to manage your boards, run live sessions, and invite students.',
+      introNoun: 'teacher account',
+      signInTarget: 'SoftLogic role portal',
+      inviteFallback: 'teacher invite',
+      setupSubject: 'Set up your SoftLogic teacher password',
+      setupCta: 'Set teacher password',
+      resetSubject: 'Reset your SoftLogic teacher password',
+      changedSubject: 'Your SoftLogic teacher password was changed',
+    };
+  }
+  if (normalizedRole === 'STUDENT') {
+    return {
+      accountLabel: 'student',
+      preheader:
+        mode === 'setup'
+          ? 'Your SoftLogic student workspace is ready. Set your password to continue.'
+          : 'A password update was requested for your SoftLogic student account.',
+      eyebrow: 'SoftLogic student access',
+      heroTitle:
+        mode === 'changed'
+          ? 'Your student password was changed.'
+          : mode === 'reset'
+          ? 'Reset your student password.'
+          : 'Your student workspace is ready.',
+      heroCopy:
+        mode === 'changed'
+          ? 'This is a confirmation that your SoftLogic student password was updated.'
+          : mode === 'reset'
+          ? 'Choose a new password to keep joining live classes and reviewing read-only boards.'
+          : 'Set your password to join live classes, view boards read-only, and review previous sessions.',
+      introNoun: 'student account',
+      signInTarget: 'SoftLogic role portal',
+      inviteFallback: 'student invite',
+      setupSubject: 'Set up your SoftLogic student password',
+      setupCta: 'Set student password',
+      resetSubject: 'Reset your SoftLogic student password',
+      changedSubject: 'Your SoftLogic student password was changed',
+    };
+  }
+  if (normalizedRole === 'PARENT') {
+    return {
+      accountLabel: 'parent',
+      preheader:
+        mode === 'setup'
+          ? 'Your SoftLogic parent portal is ready. Set your password to continue.'
+          : 'A password update was requested for your SoftLogic parent account.',
+      eyebrow: 'SoftLogic parent access',
+      heroTitle:
+        mode === 'changed'
+          ? 'Your parent password was changed.'
+          : mode === 'reset'
+          ? 'Reset your parent password.'
+          : 'Your parent portal is ready.',
+      heroCopy:
+        mode === 'changed'
+          ? 'This is a confirmation that your SoftLogic parent password was updated.'
+          : mode === 'reset'
+          ? 'Choose a new password to keep viewing linked-student progress, reports, and board history.'
+          : 'Set your password to view linked-student progress, reports, and read-only board history.',
+      introNoun: 'parent account',
+      signInTarget: 'SoftLogic role portal',
+      inviteFallback: 'parent invite',
+      setupSubject: 'Set up your SoftLogic parent password',
+      setupCta: 'Set parent password',
+      resetSubject: 'Reset your SoftLogic parent password',
+      changedSubject: 'Your SoftLogic parent password was changed',
+    };
+  }
+
+  return {
+    accountLabel: isAdminPasswordRole(role) ? 'admin' : 'account',
+    preheader:
+      mode === 'setup'
+        ? 'Your SoftLogic administrator account is ready. Set your password to continue.'
+        : 'A password reset was requested for your SoftLogic admin account.',
+    eyebrow: 'SoftLogic administrator access',
+    heroTitle:
+      mode === 'changed'
+        ? 'Your admin password was changed.'
+        : mode === 'reset'
+        ? 'Reset your admin password.'
+        : 'Your organization workspace is ready.',
+    heroCopy:
+      mode === 'changed'
+        ? 'This is a confirmation that your SoftLogic admin password was updated.'
+        : mode === 'reset'
+        ? 'Choose a new password to keep managing teachers, licenses, and launch settings.'
+        : 'Set your admin password to manage teachers, licenses, storage, and launch settings.',
+    introNoun: 'administrator account',
+    signInTarget: 'SoftLogic web admin panel',
+    inviteFallback: 'administrator invite',
+    setupSubject: 'Set up your SoftLogic admin password',
+    setupCta: 'Create admin password',
+    resetSubject: 'Reset your SoftLogic admin password',
+    changedSubject: 'Your SoftLogic admin password was changed',
+  };
+};
+
 export const getWelcomeEmailHtml = ({
   appUrl = env.PUBLIC_APP_URL,
   downloadPageUrl = env.PUBLIC_DOWNLOAD_PAGE_URL,
@@ -510,16 +655,15 @@ export const getPasswordSetupEmailHtml = ({
   );
   const safeSetupUrl = escapeHtml(setupUrl);
   const safeExpiresInLabel = escapeHtml(expiresInLabel);
+  const copy = passwordEmailCopyForRole(role, 'setup');
 
   return renderBrandEmailLayout({
-    preheader:
-      'Your SoftLogic administrator account is ready. Set your password to continue.',
-    eyebrow: 'SoftLogic administrator access',
-    heroTitle: 'Your organization workspace is ready.',
-    heroCopy:
-      'Set your admin password to manage teachers, licenses, storage, and launch settings.',
+    preheader: copy.preheader,
+    eyebrow: copy.eyebrow,
+    heroTitle: copy.heroTitle,
+    heroCopy: copy.heroCopy,
     title: `Welcome, ${safeName}`,
-    intro: `An administrator account has been created for ${safeOrganizationName}. Your role is set to ${safeRole}.`,
+    intro: `A ${copy.introNoun} has been created for ${safeOrganizationName}. Your role is set to ${safeRole}.`,
     spotlightHtml: `
       <p class="spotlight-label">Set Your Password</p>
       <a
@@ -535,19 +679,19 @@ export const getPasswordSetupEmailHtml = ({
           text-decoration: none;
         "
       >
-        Create admin password
+        ${copy.setupCta}
       </a>
       <p style="margin: 18px 0 0; color: #475467; font-size: 14px; line-height: 1.6;">
         This secure setup link expires in ${safeExpiresInLabel}.
       </p>
     `,
     outro:
-      'After your password is set, use this email address and password to sign in to the SoftLogic web admin panel.',
+      `After your password is set, use this email address and password to sign in to the ${copy.signInTarget}.`,
     securityHtml: `
       <div class="security-panel">
         <p class="security-title">Security reminder</p>
         <p class="security-copy">
-          If you did not expect this administrator invite, ignore this email and contact SoftLogic support.
+          If you did not expect this ${copy.inviteFallback}, ignore this email and contact SoftLogic support.
         </p>
       </div>
     `,
@@ -560,11 +704,12 @@ export const sendPasswordSetupEmail = async ({
 }: PasswordSetupEmailOptions): Promise<boolean> => {
   try {
     const brandLogoAttachments = getBrandLogoEmailAttachments();
+    const copy = passwordEmailCopyForRole(templateOptions.role, 'setup');
     await sendEmail({
       attachments:
         brandLogoAttachments.length > 0 ? brandLogoAttachments : undefined,
       to,
-      subject: 'Set up your SoftLogic admin password',
+      subject: copy.setupSubject,
       html: getPasswordSetupEmailHtml(templateOptions),
     });
     return true;
@@ -584,18 +729,17 @@ export const getPasswordResetEmailHtml = ({
   const safeRole = role ? escapeHtml(formatRoleLabel(role)) : null;
   const safeResetUrl = escapeHtml(resetUrl);
   const safeExpiresInLabel = escapeHtml(expiresInLabel);
+  const copy = passwordEmailCopyForRole(role, 'reset');
 
   return renderBrandEmailLayout({
-    preheader:
-      'A password reset was requested for your SoftLogic admin account.',
-    eyebrow: 'SoftLogic administrator access',
-    heroTitle: 'Reset your admin password.',
-    heroCopy:
-      'Choose a new password to keep managing teachers, licenses, and launch settings.',
+    preheader: copy.preheader,
+    eyebrow: copy.eyebrow,
+    heroTitle: copy.heroTitle,
+    heroCopy: copy.heroCopy,
     title: `Hello, ${safeName}`,
     intro: safeRole
       ? `We received a request to reset the password for your ${safeRole} account.`
-      : 'We received a request to reset the password for your SoftLogic admin account.',
+      : `We received a request to reset the password for your SoftLogic ${copy.accountLabel} account.`,
     spotlightHtml: `
       <p class="spotlight-label">Reset Your Password</p>
       <a
@@ -618,7 +762,7 @@ export const getPasswordResetEmailHtml = ({
       </p>
     `,
     outro:
-      'After your new password is set, use this email and password to sign in to the SoftLogic web admin panel.',
+      `After your new password is set, use this email and password to sign in to the ${copy.signInTarget}.`,
     securityHtml: `
       <div class="security-panel">
         <p class="security-title">Didn't request this?</p>
@@ -636,11 +780,12 @@ export const sendPasswordResetEmail = async ({
 }: PasswordResetEmailOptions): Promise<boolean> => {
   try {
     const brandLogoAttachments = getBrandLogoEmailAttachments();
+    const copy = passwordEmailCopyForRole(templateOptions.role, 'reset');
     await sendEmail({
       attachments:
         brandLogoAttachments.length > 0 ? brandLogoAttachments : undefined,
       to,
-      subject: 'Reset your SoftLogic admin password',
+      subject: copy.resetSubject,
       html: getPasswordResetEmailHtml(templateOptions),
     });
     return true;
@@ -652,17 +797,18 @@ export const sendPasswordResetEmail = async ({
 
 export const getPasswordChangedEmailHtml = ({
   name,
+  role,
 }: Omit<PasswordChangedEmailOptions, 'to'>): string => {
   const safeName = escapeHtml(name?.trim() || 'there');
+  const copy = passwordEmailCopyForRole(role, 'changed');
 
   return renderBrandEmailLayout({
-    preheader: 'Your SoftLogic admin password was changed.',
-    eyebrow: 'SoftLogic administrator access',
-    heroTitle: 'Your admin password was changed.',
-    heroCopy:
-      'This is a confirmation that your SoftLogic admin password was updated.',
+    preheader: copy.preheader,
+    eyebrow: copy.eyebrow,
+    heroTitle: copy.heroTitle,
+    heroCopy: copy.heroCopy,
     title: `Hello, ${safeName}`,
-    intro: 'Your SoftLogic admin password was changed.',
+    intro: `Your SoftLogic ${copy.accountLabel} password was changed.`,
     spotlightHtml: `
       <p class="spotlight-label">Password updated</p>
       <p style="margin: 6px 0 0; color: #101828; font-size: 16px; font-weight: 700;">
@@ -688,11 +834,12 @@ export const sendPasswordChangedEmail = async ({
 }: PasswordChangedEmailOptions): Promise<boolean> => {
   try {
     const brandLogoAttachments = getBrandLogoEmailAttachments();
+    const copy = passwordEmailCopyForRole(templateOptions.role, 'changed');
     await sendEmail({
       attachments:
         brandLogoAttachments.length > 0 ? brandLogoAttachments : undefined,
       to,
-      subject: 'Your SoftLogic admin password was changed',
+      subject: copy.changedSubject,
       html: getPasswordChangedEmailHtml(templateOptions),
     });
     return true;
@@ -862,7 +1009,7 @@ export const sendActivationKeysEmail = async ({
     preheader: `${organizationName} activation keys`,
     eyebrow: 'License Activation Keys',
     title: `Activation keys for ${organizationName}`,
-    intro: `Hi ${safeAdminName}, here is the current list of activation keys issued for <strong>${safeOrgName}</strong>. Each key locks to the first device that activates it. Keep this email secure.`,
+    intro: `Hi ${safeAdminName}, here is the current list of activation keys issued for <strong>${safeOrgName}</strong>. Each key activates one board/device, and any active user in the same organization can use the app on that activated device. Keep this email secure.`,
     spotlightHtml: renderActivationKeysTable(keys),
     outro:
       'If a teammate needs to activate a different device, request a reset from the SoftLogic super admin in the web admin panel.',
@@ -870,7 +1017,7 @@ export const sendActivationKeysEmail = async ({
       <div class="security-panel">
         <p class="security-title">Security reminder</p>
         <p class="security-copy">
-          Treat activation keys like passwords. Each key locks to the first device that successfully activates it.
+          Treat activation keys like passwords. Each key is board/device based and remains valid until expiry, suspension, or reset.
         </p>
       </div>
     `,

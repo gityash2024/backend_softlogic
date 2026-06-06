@@ -50,6 +50,15 @@ const ADMIN_LOGIN_ROLES: UserRole[] = [
   UserRole.CUSTOMER_ADMIN,
   UserRole.ADMIN,
 ];
+const PORTAL_LOGIN_ROLES: UserRole[] = [
+  UserRole.TEACHER,
+  UserRole.STUDENT,
+  UserRole.PARENT,
+];
+const PASSWORD_LOGIN_ROLES: UserRole[] = [
+  ...ADMIN_LOGIN_ROLES,
+  ...PORTAL_LOGIN_ROLES,
+];
 const PASSWORD_RESET_EXPIRY_HOURS = 24;
 const PASSWORD_SETUP_EXPIRY_DAYS = 7;
 const GOOGLE_DESKTOP_AUTH_EXPIRY_MINUTES = 10;
@@ -57,6 +66,14 @@ const GOOGLE_DESKTOP_POLL_INTERVAL_MS = 2000;
 const GOOGLE_AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
 const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
 let desktopGoogleCallbackLogoDataUri: string | null = null;
+type AuthDeviceInfo = Prisma.JsonObject;
+type AuthSessionTouchOptions = {
+  clientSessionId?: string | null;
+  currentRefreshToken?: string | null;
+  nextRefreshToken?: string | null;
+  deviceInfo?: AuthDeviceInfo;
+  ipAddress?: string;
+};
 
 interface GoogleTokenExchangeResponse {
   error?: string;
@@ -137,6 +154,8 @@ export class AuthService {
     email: string,
     code: string,
     ipAddress?: string,
+    deviceInfo?: AuthDeviceInfo,
+    clientSessionId?: string | null,
   ): Promise<AuthResponse> {
     const user = await authRepository.findUserByEmail(email);
     if (!user) {
@@ -192,12 +211,12 @@ export class AuthService {
     const tokens = generateTokenPair(tokenPayload);
 
     const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
-    await authRepository.createSession({
-      userId: user.id,
-      refreshToken: tokens.refreshToken,
+    await this.touchOwnSession(user.id, {
+      clientSessionId,
+      currentRefreshToken: tokens.refreshToken,
+      deviceInfo,
       ipAddress,
-      expiresAt,
-    });
+    }, expiresAt);
 
     const safeUser = await findUserContextById(user.id);
     if (!safeUser) {
@@ -216,6 +235,43 @@ export class AuthService {
     email: string,
     password: string,
     ipAddress?: string,
+    deviceInfo?: AuthDeviceInfo,
+    clientSessionId?: string | null,
+  ): Promise<AuthResponse> {
+    return this.passwordLogin(
+      email,
+      password,
+      ipAddress,
+      ADMIN_LOGIN_ROLES,
+      deviceInfo,
+      clientSessionId,
+    );
+  }
+
+  async portalLogin(
+    email: string,
+    password: string,
+    ipAddress?: string,
+    deviceInfo?: AuthDeviceInfo,
+    clientSessionId?: string | null,
+  ): Promise<AuthResponse> {
+    return this.passwordLogin(
+      email,
+      password,
+      ipAddress,
+      PORTAL_LOGIN_ROLES,
+      deviceInfo,
+      clientSessionId,
+    );
+  }
+
+  private async passwordLogin(
+    email: string,
+    password: string,
+    ipAddress: string | undefined,
+    allowedRoles: UserRole[],
+    deviceInfo?: AuthDeviceInfo,
+    clientSessionId?: string | null,
   ): Promise<AuthResponse> {
     const user = await authRepository.findUserByEmail(email);
     if (!user) {
@@ -230,7 +286,7 @@ export class AuthService {
       throw AuthError.invalidCredentials();
     }
 
-    if (!ADMIN_LOGIN_ROLES.includes(user.role)) {
+    if (!allowedRoles.includes(user.role)) {
       throw AuthError.unauthorized();
     }
 
@@ -252,12 +308,12 @@ export class AuthService {
     const tokens = generateTokenPair(tokenPayload);
 
     const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
-    await authRepository.createSession({
-      userId: user.id,
-      refreshToken: tokens.refreshToken,
+    await this.touchOwnSession(user.id, {
+      clientSessionId,
+      currentRefreshToken: tokens.refreshToken,
+      deviceInfo,
       ipAddress,
-      expiresAt,
-    });
+    }, expiresAt);
 
     const safeUser = await findUserContextById(user.id);
     if (!safeUser) {
@@ -273,6 +329,8 @@ export class AuthService {
   async googleSignIn(
     idToken: string,
     ipAddress?: string,
+    deviceInfo?: AuthDeviceInfo,
+    clientSessionId?: string | null,
   ): Promise<AuthResponse> {
     if (!idToken.trim()) {
       throw new AppError('Google ID token is required', 400);
@@ -322,12 +380,12 @@ export class AuthService {
     const tokens = generateTokenPair(tokenPayload);
 
     const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
-    await authRepository.createSession({
-      userId: user.id,
-      refreshToken: tokens.refreshToken,
+    await this.touchOwnSession(user.id, {
+      clientSessionId,
+      currentRefreshToken: tokens.refreshToken,
+      deviceInfo,
       ipAddress,
-      expiresAt,
-    });
+    }, expiresAt);
 
     const safeUser = await findUserContextById(user.id);
     if (!safeUser) {
@@ -362,6 +420,7 @@ export class AuthService {
 
   async handleDesktopGoogleCallback(params: {
     code?: string;
+    deviceInfo?: AuthDeviceInfo;
     error?: string;
     errorDescription?: string;
     ipAddress?: string;
@@ -432,7 +491,11 @@ export class AuthService {
 
     try {
       const idToken = await this.exchangeGoogleCodeForIdToken(code.trim());
-      const session = await this.googleSignIn(idToken, ipAddress);
+      const session = await this.googleSignIn(
+        idToken,
+        ipAddress,
+        params.deviceInfo,
+      );
 
       await authRepository.updateGoogleDesktopAuthAttempt(attempt.id, {
         completedAt: new Date(),
@@ -537,10 +600,19 @@ export class AuthService {
     };
   }
 
-  async refreshToken(refreshToken: string): Promise<AuthResponse> {
+  async refreshToken(
+    refreshToken: string,
+    ipAddress?: string,
+    deviceInfo?: AuthDeviceInfo,
+    clientSessionId?: string | null,
+  ): Promise<AuthResponse> {
     try {
       const session = await authRepository.findSessionByToken(refreshToken);
       if (!session) {
+        throw AuthError.tokenInvalid();
+      }
+      if (session.revokedAt) {
+        await authRepository.deleteSession(session.id);
         throw AuthError.tokenInvalid();
       }
 
@@ -561,8 +633,6 @@ export class AuthService {
       }
       await licensingService.assertOrganizationCanLogin(user.id);
 
-      await authRepository.deleteSession(session.id);
-
       const tokenPayload = {
         userId: user.id,
         email: user.email,
@@ -572,11 +642,16 @@ export class AuthService {
       const tokens = generateTokenPair(tokenPayload);
 
       const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
-      await authRepository.createSession({
-        userId: user.id,
-        refreshToken: tokens.refreshToken,
-        expiresAt,
-      });
+      await this.touchOwnSession(user.id, {
+        clientSessionId: clientSessionId ?? session.clientSessionId,
+        currentRefreshToken: refreshToken,
+        nextRefreshToken: tokens.refreshToken,
+        deviceInfo:
+          deviceInfo && Object.keys(deviceInfo).length > 0
+            ? deviceInfo
+            : ((session.deviceInfo as AuthDeviceInfo | null) ?? undefined),
+        ipAddress: ipAddress ?? session.ipAddress ?? undefined,
+      }, expiresAt);
 
       const safeUser = await findUserContextById(user.id);
       if (!safeUser) {
@@ -603,6 +678,144 @@ export class AuthService {
     }
   }
 
+  async listOwnSessions(
+    userId: string,
+    currentRefreshToken?: string | null,
+    options?: Omit<AuthSessionTouchOptions, 'currentRefreshToken'>,
+  ): Promise<
+    Array<{
+      id: string;
+      clientSessionId: string | null;
+      deviceInfo: Prisma.JsonValue | null;
+      ipAddress: string | null;
+      createdAt: Date;
+      lastSeenAt: Date | null;
+      expiresAt: Date;
+      isCurrent: boolean;
+    }>
+  > {
+    await this.touchOwnSession(userId, {
+      clientSessionId: options?.clientSessionId,
+      currentRefreshToken,
+      deviceInfo: options?.deviceInfo,
+      ipAddress: options?.ipAddress,
+    }).catch(() => undefined);
+    const sessions = await authRepository.listUserSessions(userId);
+    const currentToken = currentRefreshToken?.trim();
+    return sessions.map((session) => ({
+      id: session.id,
+      clientSessionId: session.clientSessionId,
+      deviceInfo: session.deviceInfo,
+      ipAddress: session.ipAddress,
+      createdAt: session.createdAt,
+      lastSeenAt: session.lastSeenAt,
+      expiresAt: session.expiresAt,
+      isCurrent: Boolean(
+        (currentToken && session.refreshToken === currentToken) ||
+          (options?.clientSessionId &&
+            session.clientSessionId === options.clientSessionId),
+      ),
+    }));
+  }
+
+  async heartbeatOwnSession(
+    userId: string,
+    options: AuthSessionTouchOptions,
+  ): Promise<{ id: string; lastSeenAt: Date | null }> {
+    const session = await this.touchOwnSession(userId, options);
+    return { id: session.id, lastSeenAt: session.lastSeenAt };
+  }
+
+  async revokeOwnSession(
+    userId: string,
+    sessionId: string,
+    currentRefreshToken?: string | null,
+    currentClientSessionId?: string | null,
+  ): Promise<{ message: string }> {
+    const session = await authRepository.findUserSessionById(userId, sessionId);
+    if (!session) {
+      throw new AppError('Login session not found', 404);
+    }
+
+    const currentToken = currentRefreshToken?.trim();
+    if (
+      (currentToken && session.refreshToken === currentToken) ||
+      (currentClientSessionId && session.clientSessionId === currentClientSessionId)
+    ) {
+      throw new AppError('Use Sign out to end your current session', 400);
+    }
+
+    await authRepository.updateSession(session.id, {
+      refreshToken: null,
+      revokedAt: new Date(),
+    });
+    return { message: 'Login session revoked successfully' };
+  }
+
+  private async touchOwnSession(
+    userId: string,
+    options: AuthSessionTouchOptions,
+    expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+  ) {
+    const now = new Date();
+    const refreshToken = options.currentRefreshToken?.trim() || null;
+    const nextRefreshToken = options.nextRefreshToken?.trim() || null;
+    const clientSessionId = options.clientSessionId?.trim() || null;
+    if (!refreshToken && !clientSessionId && !nextRefreshToken) {
+      throw AuthError.tokenInvalid();
+    }
+
+    const tokenSession = refreshToken
+      ? await authRepository.findSessionByToken(refreshToken)
+      : null;
+    const clientSession = clientSessionId
+      ? await authRepository.findUserSessionByClientSessionId(
+          userId,
+          clientSessionId,
+        )
+      : null;
+    const session = clientSession ?? tokenSession;
+
+    if (tokenSession && tokenSession.userId !== userId) {
+      throw AuthError.tokenInvalid();
+    }
+    if (session?.revokedAt || tokenSession?.revokedAt) {
+      throw AuthError.tokenInvalid();
+    }
+
+    if (tokenSession && clientSession && tokenSession.id !== clientSession.id) {
+      await authRepository.deleteSession(tokenSession.id);
+    }
+
+    const data: Prisma.SessionUpdateInput = {
+      expiresAt,
+      lastSeenAt: now,
+      revokedAt: null,
+    };
+    if (nextRefreshToken || refreshToken) {
+      data.refreshToken = nextRefreshToken ?? refreshToken;
+    }
+    if (clientSessionId) data.clientSessionId = clientSessionId;
+    if (options.deviceInfo && Object.keys(options.deviceInfo).length > 0) {
+      data.deviceInfo = options.deviceInfo;
+    }
+    if (options.ipAddress) data.ipAddress = options.ipAddress;
+
+    if (session) {
+      return authRepository.updateSession(session.id, data);
+    }
+
+    return authRepository.createSession({
+      userId,
+      refreshToken: nextRefreshToken ?? refreshToken,
+      clientSessionId,
+      deviceInfo: options.deviceInfo,
+      ipAddress: options.ipAddress,
+      expiresAt,
+      lastSeenAt: now,
+    });
+  }
+
   async validatePasswordSetupToken(token: string): Promise<{
     email: string;
     name: string | null;
@@ -623,8 +836,8 @@ export class AuthService {
     if (!otp.user || otp.user.deletedAt || otp.user.status !== UserStatus.ACTIVE) {
       throw new AppError('Password setup account is not active', 400);
     }
-    if (!ADMIN_LOGIN_ROLES.includes(otp.user.role)) {
-      throw new AppError('Password setup is only available for admin accounts', 403);
+    if (!PASSWORD_LOGIN_ROLES.includes(otp.user.role)) {
+      throw new AppError('Password setup is only available for portal accounts', 403);
     }
 
     const matches = await bcrypt.compare(secret, otp.code);
@@ -668,7 +881,7 @@ export class AuthService {
         action: 'auth.password.complete',
         targetType: 'user',
         targetId: otp.userId,
-        summary: 'Admin completed password setup',
+        summary: 'User completed password setup',
         ip: ipAddress,
       });
     } catch {
@@ -679,6 +892,7 @@ export class AuthService {
       await sendPasswordChangedEmail({
         to: setup.email,
         name: setup.name,
+        role: setup.role,
       });
     } catch {
       // Fire-and-forget — email failure must not break password setup.
@@ -733,7 +947,7 @@ export class AuthService {
         action: 'auth.password.change',
         targetType: 'user',
         targetId: user.id,
-        summary: 'Admin changed password',
+        summary: 'User changed password',
         ip: options?.ipAddress,
       });
     } catch {
@@ -744,6 +958,7 @@ export class AuthService {
       await sendPasswordChangedEmail({
         to: user.email,
         name: user.name,
+        role: user.role,
       });
     } catch {
       // Fire-and-forget — email failure must not break the password change.
@@ -759,14 +974,14 @@ export class AuthService {
   /**
    * Request a password reset email. Always returns success — never reveals
    * whether the email is registered (prevents enumeration). Only sends an
-   * actual email when the user exists, is active, and has an admin role.
+   * actual email when the user exists, is active, and has a password-login role.
    */
   async requestPasswordReset(
     email: string,
     ipAddress?: string,
   ): Promise<{ message: string }> {
     const genericMessage =
-      'If the email matches an admin account, a password reset link has been sent.';
+      'If the email matches a SoftLogic account, a password reset link has been sent.';
     const normalizedEmail = email.trim().toLowerCase();
     if (!normalizedEmail) {
       return { message: genericMessage };
@@ -777,7 +992,7 @@ export class AuthService {
       !user ||
       user.deletedAt ||
       user.status !== UserStatus.ACTIVE ||
-      !ADMIN_LOGIN_ROLES.includes(user.role)
+      !PASSWORD_LOGIN_ROLES.includes(user.role)
     ) {
       return { message: genericMessage };
     }
@@ -788,7 +1003,7 @@ export class AuthService {
         action: 'auth.password_reset.request',
         targetType: 'user',
         targetId: user.id,
-        summary: 'Admin requested a password reset',
+        summary: 'User requested a password reset',
         ip: ipAddress,
       });
     } catch {

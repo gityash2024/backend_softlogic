@@ -1,9 +1,12 @@
 import { Request, Response, NextFunction } from 'express';
+import { ExportFormat, ExportStatus } from '@prisma/client';
 import { prisma } from '@/config';
 import { ApiResponse } from '@/shared/utils/api-response';
 import { AppError } from '@/shared/errors/AppError';
 import { ensureCanvasAccess } from '@/shared/utils/access-control';
 import { logger } from '@/shared/middleware/logger.middleware';
+import { fileStorageService } from '@/shared/services/file-storage.service';
+import { writeAuditLog } from '@/shared/utils/audit';
 import fs from 'fs/promises';
 import path from 'path';
 
@@ -22,6 +25,7 @@ import {
 
 type ExportQualityInput = 'LOW' | 'MEDIUM' | 'HIGH';
 type ExportResolutionInput = 'STANDARD' | 'HD' | 'ULTRA';
+const MAX_CLIENT_EXPORT_BYTES = 500 * 1024 * 1024;
 
 const normalizeExportQuality = (value: unknown): ExportQualityInput => {
   if (typeof value !== 'string') {
@@ -47,6 +51,23 @@ const normalizeExportResolution = (value: unknown): ExportResolutionInput => {
   }
 
   throw new AppError('Export resolution must be STANDARD, HD, or ULTRA', 400);
+};
+
+const normalizeClientExportFormat = (value: unknown): ExportFormat => {
+  const normalized = typeof value === 'string' ? value.trim().toUpperCase() : '';
+  if (['PDF', 'PNG', 'JPG', 'SVG'].includes(normalized)) {
+    return normalized as ExportFormat;
+  }
+  throw new AppError('Export format must be PDF, PNG, JPG, or SVG', 400);
+};
+
+const normalizeClientExportStatus = (value: unknown): ExportStatus => {
+  const normalized =
+    typeof value === 'string' ? value.trim().toUpperCase() : 'COMPLETED';
+  if (normalized === 'COMPLETED' || normalized === 'FAILED') {
+    return normalized as ExportStatus;
+  }
+  throw new AppError('Client export status must be COMPLETED or FAILED', 400);
 };
 
 const getImportMetadata = (body: Request['body']): Record<string, string> => {
@@ -132,6 +153,107 @@ const publicIdPrefix = (publicId: string): string =>
   publicId.split('/').slice(0, 4).join('/');
 
 export class ExportController {
+  async createClientUploadIntent(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
+    try {
+      const fileName =
+        typeof req.body.fileName === 'string' ? req.body.fileName.trim() : '';
+      const mimeType =
+        typeof req.body.mimeType === 'string'
+          ? req.body.mimeType.trim()
+          : 'application/octet-stream';
+      const sizeBytes = Number(req.body.sizeBytes);
+
+      if (!fileName) {
+        throw new AppError('File name is required', 400);
+      }
+      if (!Number.isFinite(sizeBytes) || sizeBytes <= 0) {
+        throw new AppError('Export file size is required', 400);
+      }
+      if (sizeBytes > MAX_CLIENT_EXPORT_BYTES) {
+        throw new AppError('Export file size is too large', 413);
+      }
+
+      const intent = await fileStorageService.createSignedUploadIntent({
+        prefix: `exports/${req.user!.userId}`,
+        fileName,
+        mimeType,
+        maxSizeBytes: MAX_CLIENT_EXPORT_BYTES,
+      });
+      ApiResponse.success(res, intent, 'Client export upload intent created');
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async completeClientExport(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
+    try {
+      const canvasId =
+        typeof req.body.canvasId === 'string' ? req.body.canvasId.trim() : '';
+      if (!canvasId) {
+        throw new AppError('Canvas id is required', 400);
+      }
+      await ensureCanvasAccess(canvasId, req.user!);
+
+      const format = normalizeClientExportFormat(req.body.format);
+      const status = normalizeClientExportStatus(req.body.status);
+      const storageKey =
+        typeof req.body.storageKey === 'string' ? req.body.storageKey.trim() : '';
+      const suppliedUrl =
+        typeof req.body.fileUrl === 'string' ? req.body.fileUrl.trim() : '';
+      const fileUrl = suppliedUrl || (storageKey ? fileStorageService.publicUrlFor(storageKey) : '');
+      const fileSize = Number(req.body.fileSize);
+
+      if (status === ExportStatus.COMPLETED && !fileUrl) {
+        throw new AppError('Completed client exports require a file URL', 400);
+      }
+
+      const exportRecord = await prisma.export.create({
+        data: {
+          canvasId,
+          userId: req.user!.userId,
+          format,
+          status,
+          fileUrl: fileUrl || null,
+          fileSize: Number.isFinite(fileSize) && fileSize > 0 ? Math.floor(fileSize) : null,
+          completedAt: status === ExportStatus.COMPLETED ? new Date() : null,
+        },
+      });
+
+      await writeAuditLog({
+        actorUserId: req.user!.userId,
+        action:
+          status === ExportStatus.COMPLETED
+            ? 'classroom.export.completed'
+            : 'classroom.export.failed',
+        targetType: 'canvas',
+        targetId: canvasId,
+        summary:
+          status === ExportStatus.COMPLETED
+            ? `${format} export completed`
+            : `${format} export failed`,
+        ip: req.ip,
+        metadata: {
+          exportId: exportRecord.id,
+          format,
+          fileUrl: fileUrl || null,
+          storageKey: storageKey || null,
+        },
+      });
+
+      ApiResponse.created(res, exportRecord, 'Client export recorded');
+    } catch (error) {
+      next(error);
+    }
+  }
+
   async createImportUploadIntent(
     req: Request,
     res: Response,

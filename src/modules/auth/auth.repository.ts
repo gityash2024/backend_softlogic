@@ -109,32 +109,98 @@ export class AuthRepository {
     });
   }
 
-  async createSession(data: { userId: string; refreshToken: string; deviceInfo?: object; ipAddress?: string; expiresAt: Date }): Promise<Session> {
-    return prisma.session.create({ data: { ...data, deviceInfo: data.deviceInfo ?? undefined } });
+  async createSession(data: {
+    userId: string;
+    refreshToken?: string | null;
+    clientSessionId?: string | null;
+    deviceInfo?: object;
+    ipAddress?: string | null;
+    expiresAt: Date;
+    createdAt?: Date;
+    lastSeenAt?: Date;
+  }): Promise<Session> {
+    return prisma.session.create({
+      data: {
+        ...data,
+        refreshToken: data.refreshToken ?? undefined,
+        clientSessionId: data.clientSessionId ?? undefined,
+        deviceInfo: data.deviceInfo ?? undefined,
+        ipAddress: data.ipAddress ?? undefined,
+      },
+    });
   }
 
   async findSessionByToken(refreshToken: string): Promise<Session | null> {
+    if (!refreshToken.trim()) {
+      return null;
+    }
     return prisma.session.findUnique({ where: { refreshToken } });
   }
 
+  async findUserSessionByClientSessionId(
+    userId: string,
+    clientSessionId: string,
+  ): Promise<Session | null> {
+    return prisma.session.findUnique({
+      where: { userId_clientSessionId: { userId, clientSessionId } },
+    });
+  }
+
+  async listUserSessions(userId: string): Promise<Session[]> {
+    return prisma.session.findMany({
+      where: { userId, revokedAt: null, expiresAt: { gt: new Date() } },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  async findUserSessionById(
+    userId: string,
+    sessionId: string,
+  ): Promise<Session | null> {
+    return prisma.session.findFirst({
+      where: { id: sessionId, userId, revokedAt: null },
+    });
+  }
+
+  async updateSession(
+    id: string,
+    data: Prisma.SessionUpdateInput,
+  ): Promise<Session> {
+    return prisma.session.update({ where: { id }, data });
+  }
+
   async deleteSession(id: string): Promise<void> {
-    await prisma.session.delete({ where: { id } });
+    await prisma.session.update({
+      where: { id },
+      data: { refreshToken: null, revokedAt: new Date() },
+    });
   }
 
   async deleteSessionByToken(refreshToken: string): Promise<void> {
-    await prisma.session.delete({ where: { refreshToken } });
+    await prisma.session.updateMany({
+      where: { refreshToken },
+      data: { refreshToken: null, revokedAt: new Date() },
+    });
   }
 
   async deleteAllUserSessions(userId: string): Promise<void> {
-    await prisma.session.deleteMany({ where: { userId } });
+    await prisma.session.updateMany({
+      where: { userId, revokedAt: null },
+      data: { refreshToken: null, revokedAt: new Date() },
+    });
   }
 
   async deleteOtherUserSessions(
     userId: string,
     keepRefreshToken: string,
   ): Promise<void> {
-    await prisma.session.deleteMany({
-      where: { userId, refreshToken: { not: keepRefreshToken } },
+    await prisma.session.updateMany({
+      where: {
+        userId,
+        revokedAt: null,
+        OR: [{ refreshToken: { not: keepRefreshToken } }, { refreshToken: null }],
+      },
+      data: { refreshToken: null, revokedAt: new Date() },
     });
   }
 

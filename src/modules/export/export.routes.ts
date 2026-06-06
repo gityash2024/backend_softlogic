@@ -13,6 +13,8 @@ router.post(
   uploadDocumentSingle('document'),
   exportController.convertImportDocument,
 );
+router.post('/client/upload-intent', exportController.createClientUploadIntent);
+router.post('/client/complete', exportController.completeClientExport);
 router.post('/pdf', exportController.exportPdf);
 router.post('/image', exportController.exportImage);
 router.get('/:id/status', exportController.getStatus);
