@@ -9,68 +9,68 @@ datasource db {
 }
 
 model User {
-  id                    String                   @id @default(uuid())
-  email                 String                   @unique
+  id                    String     @id @default(uuid())
+  email                 String     @unique
   name                  String?
   avatar                String?
-  googleId              String?                  @unique
+  googleId              String?    @unique
   passwordHash          String?
-  isEmailVerified       Boolean                  @default(false)
-  role                  UserRole                 @default(STUDENT)
-  status                UserStatus               @default(ACTIVE)
-  timezone              String                   @default("UTC")
-  language              String                   @default("en")
-  invitedAt             DateTime                 @default(now())
+  isEmailVerified       Boolean    @default(false)
+  role                  UserRole   @default(STUDENT)
+  status                UserStatus @default(ACTIVE)
+  timezone              String     @default("UTC")
+  language              String     @default("en")
+  invitedAt             DateTime   @default(now())
   lastLoginAt           DateTime?
   invitedById           String?
   primaryOrganizationId String?
   archivedEmail         String?
-  createdAt             DateTime                 @default(now())
-  updatedAt             DateTime                 @updatedAt
+  createdAt             DateTime   @default(now())
+  updatedAt             DateTime   @updatedAt
   deletedAt             DateTime?
 
-  invitedBy             User?                    @relation("UserInvitations", fields: [invitedById], references: [id], onDelete: SetNull)
-  invitedUsers          User[]                   @relation("UserInvitations")
-  primaryOrganization   Organization?            @relation("PrimaryOrganization", fields: [primaryOrganizationId], references: [id], onDelete: SetNull)
-  sessions              Session[]
-  otps                  Otp[]
-  canvases              Canvas[]
-  userSettings          UserSettings?
-  memberships           OrganizationMembership[]
-  exports               Export[]
-  contentImports        ContentImport[]
-  subscriptions         Subscription[]           @relation("SubscriptionOwner")
-  subscriptionsCreated  Subscription[]           @relation("SubscriptionCreatedBy")
-  auditLogs             AdminAuditLog[]          @relation("AuditActor")
-  liveSessionsCreated   LiveSession[]            @relation("LiveSessionCreator")
-  liveSessionsHosted    LiveSession[]            @relation("LiveSessionHost")
-  liveSessionParticipants LiveSessionParticipant[]
-  liveSessionInvitesSent LiveSessionInvite[]      @relation("LiveSessionInviteSender")
-  liveSessionInvites     LiveSessionInvite[]      @relation("LiveSessionInviteUser")
-  liveSessionMessages    LiveSessionMessage[]
-  liveSessionRecordings  LiveSessionRecording[]
-  liveSessionEvents      LiveSessionEvent[]
-  oauthConnections       OAuthConnection[]
-  lmsConnections         LmsConnection[]
-  lmsSyncJobs            LmsSyncJob[]
-  googleDesktopAuthAttempts GoogleDesktopAuthAttempt[]
-  parentLinks            ParentStudentLink[]    @relation("ParentLinks")
-  studentParentLinks     ParentStudentLink[]    @relation("StudentParentLinks")
+  invitedBy                   User?                           @relation("UserInvitations", fields: [invitedById], references: [id], onDelete: SetNull)
+  invitedUsers                User[]                          @relation("UserInvitations")
+  primaryOrganization         Organization?                   @relation("PrimaryOrganization", fields: [primaryOrganizationId], references: [id], onDelete: SetNull)
+  sessions                    Session[]
+  otps                        Otp[]
+  canvases                    Canvas[]
+  userSettings                UserSettings?
+  memberships                 OrganizationMembership[]
+  exports                     Export[]
+  contentImports              ContentImport[]
+  subscriptions               Subscription[]                  @relation("SubscriptionOwner")
+  subscriptionsCreated        Subscription[]                  @relation("SubscriptionCreatedBy")
+  auditLogs                   AdminAuditLog[]                 @relation("AuditActor")
+  liveSessionsCreated         LiveSession[]                   @relation("LiveSessionCreator")
+  liveSessionsHosted          LiveSession[]                   @relation("LiveSessionHost")
+  liveSessionParticipants     LiveSessionParticipant[]
+  liveSessionInvitesSent      LiveSessionInvite[]             @relation("LiveSessionInviteSender")
+  liveSessionInvites          LiveSessionInvite[]             @relation("LiveSessionInviteUser")
+  liveSessionMessages         LiveSessionMessage[]
+  liveSessionRecordings       LiveSessionRecording[]
+  liveSessionEvents           LiveSessionEvent[]
+  oauthConnections            OAuthConnection[]
+  lmsConnections              LmsConnection[]
+  lmsSyncJobs                 LmsSyncJob[]
+  googleDesktopAuthAttempts   GoogleDesktopAuthAttempt[]
+  parentLinks                 ParentStudentLink[]             @relation("ParentLinks")
+  studentParentLinks          ParentStudentLink[]             @relation("StudentParentLinks")
   storageConnectionsConnected OrganizationStorageConnection[] @relation("StorageConnectionsConnectedBy")
-  checkoutSessionsCreated CheckoutSession[]     @relation("CheckoutSessionsCreatedBy")
-  paymentTransactionsRecorded PaymentTransaction[] @relation("PaymentTransactionsRecordedBy")
-  hardwareKeysAssigned   HardwareActivationKey[] @relation("HardwareKeysAssignedUser")
-  hardwareKeysCreated    HardwareActivationKey[] @relation("HardwareKeysCreatedBy")
-  hardwareActivations    HardwareActivation[]   @relation("HardwareActivationsUser")
-  hardwareResetsApproved HardwareActivation[]   @relation("HardwareActivationsResetApprovedBy")
-  aiCreditAccounts       AiCreditAccount[]      @relation("AiCreditAccountsUser")
-  aiCreditLedgerEntries  AiCreditLedgerEntry[]  @relation("AiCreditLedgerActor")
-  termsAcceptances       TermsAcceptance[]      @relation("TermsAcceptancesUser")
-  primaryAdminOrganizations Organization[]      @relation("OrganizationPrimaryAdmin")
-  supportThreadsOpened    SupportThread[]        @relation("SupportThreadsOpened")
-  supportThreadsResolved  SupportThread[]        @relation("SupportThreadsResolved")
-  supportMessagesAuthored SupportMessage[]       @relation("SupportMessagesAuthored")
-  supportThreadEventsActor SupportThreadEvent[]  @relation("SupportThreadEventsActor")
+  checkoutSessionsCreated     CheckoutSession[]               @relation("CheckoutSessionsCreatedBy")
+  paymentTransactionsRecorded PaymentTransaction[]            @relation("PaymentTransactionsRecordedBy")
+  hardwareKeysAssigned        HardwareActivationKey[]         @relation("HardwareKeysAssignedUser")
+  hardwareKeysCreated         HardwareActivationKey[]         @relation("HardwareKeysCreatedBy")
+  hardwareActivations         HardwareActivation[]            @relation("HardwareActivationsUser")
+  hardwareResetsApproved      HardwareActivation[]            @relation("HardwareActivationsResetApprovedBy")
+  aiCreditAccounts            AiCreditAccount[]               @relation("AiCreditAccountsUser")
+  aiCreditLedgerEntries       AiCreditLedgerEntry[]           @relation("AiCreditLedgerActor")
+  termsAcceptances            TermsAcceptance[]               @relation("TermsAcceptancesUser")
+  primaryAdminOrganizations   Organization[]                  @relation("OrganizationPrimaryAdmin")
+  supportThreadsOpened        SupportThread[]                 @relation("SupportThreadsOpened")
+  supportThreadsResolved      SupportThread[]                 @relation("SupportThreadsResolved")
+  supportMessagesAuthored     SupportMessage[]                @relation("SupportMessagesAuthored")
+  supportThreadEventsActor    SupportThreadEvent[]            @relation("SupportThreadEventsActor")
 
   @@map("users")
 }
@@ -91,58 +91,58 @@ enum UserStatus {
 }
 
 model Organization {
-  id                 String                 @id @default(uuid())
-  name               String
-  slug               String                 @unique
-  kind               OrganizationKind       @default(CUSTOMER)
-  status             OrganizationStatus     @default(ACTIVE)
-  brandingMode       BrandingMode           @default(SOFTLOGIC)
-  studentLoginEnabled Boolean                @default(false)
-  parentLoginEnabled  Boolean                @default(false)
-  sessionOnlyJoinEnabled Boolean             @default(true)
-  teacherOnlyMode    Boolean                @default(false)
-  supportEmail       String?
-  supportPhone       String?
-  primaryAdminUserId String?
-  archivedSlug       String?
-  archivedSupportEmail String?
-  storageProviders   OrganizationStorageProvider[] @default([])
-  storageProvider    OrganizationStorageProvider?
-  storageStatus      OrganizationStorageStatus @default(NOT_CONFIGURED)
-  logoUrl            String?
-  logoPublicId       String?
-  brandName          String?
-  brandPrimaryColor  String?
-  brandAccentColor   String?
-  settings           Json                   @default("{}")
-  parentOrganizationId String?
-  createdAt          DateTime               @default(now())
-  updatedAt          DateTime               @updatedAt
-  deletedAt          DateTime?
+  id                     String                        @id @default(uuid())
+  name                   String
+  slug                   String                        @unique
+  kind                   OrganizationKind              @default(CUSTOMER)
+  status                 OrganizationStatus            @default(ACTIVE)
+  brandingMode           BrandingMode                  @default(SOFTLOGIC)
+  studentLoginEnabled    Boolean                       @default(false)
+  parentLoginEnabled     Boolean                       @default(false)
+  sessionOnlyJoinEnabled Boolean                       @default(true)
+  teacherOnlyMode        Boolean                       @default(false)
+  supportEmail           String?
+  supportPhone           String?
+  primaryAdminUserId     String?
+  archivedSlug           String?
+  archivedSupportEmail   String?
+  storageProviders       OrganizationStorageProvider[] @default([])
+  storageProvider        OrganizationStorageProvider?
+  storageStatus          OrganizationStorageStatus     @default(NOT_CONFIGURED)
+  logoUrl                String?
+  logoPublicId           String?
+  brandName              String?
+  brandPrimaryColor      String?
+  brandAccentColor       String?
+  settings               Json                          @default("{}")
+  parentOrganizationId   String?
+  createdAt              DateTime                      @default(now())
+  updatedAt              DateTime                      @updatedAt
+  deletedAt              DateTime?
 
-  parentOrganization Organization?          @relation("OrganizationHierarchy", fields: [parentOrganizationId], references: [id], onDelete: SetNull)
-  childOrganizations Organization[]         @relation("OrganizationHierarchy")
-  primaryAdminUser   User?                  @relation("OrganizationPrimaryAdmin", fields: [primaryAdminUserId], references: [id], onDelete: SetNull)
-  memberships        OrganizationMembership[]
-  primaryUsers       User[]                 @relation("PrimaryOrganization")
-  canvases           Canvas[]
-  subscriptions      Subscription[]
-  liveSessions       LiveSession[]
-  parentStudentLinks ParentStudentLink[]
-  storageConnections OrganizationStorageConnection[]
-  aiCreditAccounts   AiCreditAccount[]
-  hardwareActivationKeys HardwareActivationKey[]
-  hardwareActivations HardwareActivation[]
-  checkoutSessions   CheckoutSession[]
-  paymentTransactions PaymentTransaction[]
-  contentImports ContentImport[]
+  parentOrganization           Organization?                   @relation("OrganizationHierarchy", fields: [parentOrganizationId], references: [id], onDelete: SetNull)
+  childOrganizations           Organization[]                  @relation("OrganizationHierarchy")
+  primaryAdminUser             User?                           @relation("OrganizationPrimaryAdmin", fields: [primaryAdminUserId], references: [id], onDelete: SetNull)
+  memberships                  OrganizationMembership[]
+  primaryUsers                 User[]                          @relation("PrimaryOrganization")
+  canvases                     Canvas[]
+  subscriptions                Subscription[]
+  liveSessions                 LiveSession[]
+  parentStudentLinks           ParentStudentLink[]
+  storageConnections           OrganizationStorageConnection[]
+  aiCreditAccounts             AiCreditAccount[]
+  hardwareActivationKeys       HardwareActivationKey[]
+  hardwareActivations          HardwareActivation[]
+  checkoutSessions             CheckoutSession[]
+  paymentTransactions          PaymentTransaction[]
+  contentImports               ContentImport[]
   liveSessionGuestParticipants LiveSessionGuestParticipant[]
-  termsAcceptances TermsAcceptance[]
-  supportThreads SupportThread[]
+  termsAcceptances             TermsAcceptance[]
+  supportThreads               SupportThread[]
 
-  @@map("organizations")
   @@index([primaryAdminUserId])
   @@index([deletedAt])
+  @@map("organizations")
 }
 
 enum OrganizationKind {
@@ -177,11 +177,11 @@ enum OrganizationStorageStatus {
 }
 
 model OrganizationMembership {
-  id             String       @id @default(uuid())
+  id             String   @id @default(uuid())
   userId         String
   organizationId String
-  createdAt      DateTime     @default(now())
-  updatedAt      DateTime     @updatedAt
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
   user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
@@ -192,16 +192,16 @@ model OrganizationMembership {
 }
 
 model Session {
-  id           String   @id @default(uuid())
-  userId       String
-  refreshToken String?  @unique
+  id              String    @id @default(uuid())
+  userId          String
+  refreshToken    String?   @unique
   clientSessionId String?
-  deviceInfo   Json?
-  ipAddress    String?
-  expiresAt    DateTime
-  lastSeenAt   DateTime?
-  revokedAt    DateTime?
-  createdAt    DateTime @default(now())
+  deviceInfo      Json?
+  ipAddress       String?
+  expiresAt       DateTime
+  lastSeenAt      DateTime?
+  revokedAt       DateTime?
+  createdAt       DateTime  @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -211,17 +211,17 @@ model Session {
 }
 
 model GoogleDesktopAuthAttempt {
-  id            String                        @id @default(uuid())
-  userId        String?
-  state         String                        @unique
-  status        GoogleDesktopAuthAttemptStatus @default(PENDING)
-  errorMessage  String?
+  id             String                         @id @default(uuid())
+  userId         String?
+  state          String                         @unique
+  status         GoogleDesktopAuthAttemptStatus @default(PENDING)
+  errorMessage   String?
   sessionPayload Json?
-  expiresAt     DateTime
-  completedAt   DateTime?
-  consumedAt    DateTime?
-  createdAt     DateTime                      @default(now())
-  updatedAt     DateTime                      @updatedAt
+  expiresAt      DateTime
+  completedAt    DateTime?
+  consumedAt     DateTime?
+  createdAt      DateTime                       @default(now())
+  updatedAt      DateTime                       @updatedAt
 
   user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
 
@@ -237,14 +237,14 @@ enum GoogleDesktopAuthAttemptStatus {
 }
 
 model Otp {
-  id        String   @id @default(uuid())
+  id        String    @id @default(uuid())
   userId    String
   code      String
   type      OtpType
   expiresAt DateTime
   usedAt    DateTime?
-  attempts  Int      @default(0)
-  createdAt DateTime @default(now())
+  attempts  Int       @default(0)
+  createdAt DateTime  @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -258,24 +258,24 @@ enum OtpType {
 }
 
 model UserSettings {
-  id              String   @id @default(uuid())
-  userId          String   @unique
-  theme           String   @default("light")
-  language        String   @default("en")
-  timezone        String   @default("UTC")
-  autoTimezoneEnabled Boolean @default(false)
-  performanceMode Boolean  @default(false)
-  performanceLevel PerformanceLevel @default(HIGH)
-  profanityFilter Boolean  @default(true)
+  id                   String           @id @default(uuid())
+  userId               String           @unique
+  theme                String           @default("light")
+  language             String           @default("en")
+  timezone             String           @default("UTC")
+  autoTimezoneEnabled  Boolean          @default(false)
+  performanceMode      Boolean          @default(false)
+  performanceLevel     PerformanceLevel @default(HIGH)
+  profanityFilter      Boolean          @default(true)
   customProfanityWords Json?
-  defaultPenSize  Float    @default(4.0)
-  defaultPenColor String   @default("#000000")
-  recentColors    Json?
-  favoriteColors  Json?
-  shortcuts       Json?
-  notifications   Json?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  defaultPenSize       Float            @default(4.0)
+  defaultPenColor      String           @default("#000000")
+  recentColors         Json?
+  favoriteColors       Json?
+  shortcuts            Json?
+  notifications        Json?
+  createdAt            DateTime         @default(now())
+  updatedAt            DateTime         @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -304,17 +304,18 @@ enum PerformanceLevel {
 }
 
 model Canvas {
-  id             String   @id @default(uuid())
+  id             String    @id @default(uuid())
   userId         String
   organizationId String?
   name           String
   description    String?
   metadata       Json?
   thumbnail      String?
-  isPublic       Boolean  @default(false)
-  shareToken     String?  @unique
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  clientDraftId  String?
+  isPublic       Boolean   @default(false)
+  shareToken     String?   @unique
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
   deletedAt      DateTime?
 
   user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -323,6 +324,7 @@ model Canvas {
   exports      Export[]
   liveSessions LiveSession[]
 
+  @@unique([userId, clientDraftId])
   @@index([organizationId])
   @@map("canvases")
 }
@@ -413,28 +415,28 @@ enum ContentImportStatus {
 }
 
 model Subscription {
-  id             String             @id @default(uuid())
-  organizationId String?
-  userId         String?
-  createdById    String?
-  planName       String
-  status         SubscriptionStatus @default(ACTIVE)
-  brandingMode   BrandingMode       @default(SOFTLOGIC)
-  seatLimit      Int                @default(1)
-  seatUsage      Int                @default(0)
-  seatAlertTier        Int?
-  expiryReminderTier   Int?
-  startDate      DateTime
-  endDate        DateTime?
-  createdAt      DateTime           @default(now())
-  updatedAt      DateTime           @updatedAt
-  deletedAt      DateTime?
+  id                 String             @id @default(uuid())
+  organizationId     String?
+  userId             String?
+  createdById        String?
+  planName           String
+  status             SubscriptionStatus @default(ACTIVE)
+  brandingMode       BrandingMode       @default(SOFTLOGIC)
+  seatLimit          Int                @default(1)
+  seatUsage          Int                @default(0)
+  seatAlertTier      Int?
+  expiryReminderTier Int?
+  startDate          DateTime
+  endDate            DateTime?
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+  deletedAt          DateTime?
 
-  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
-  user         User?         @relation("SubscriptionOwner", fields: [userId], references: [id], onDelete: SetNull)
-  createdBy    User?         @relation("SubscriptionCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
-  checkoutSessions CheckoutSession[]
-  paymentTransactions PaymentTransaction[]
+  organization           Organization?           @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  user                   User?                   @relation("SubscriptionOwner", fields: [userId], references: [id], onDelete: SetNull)
+  createdBy              User?                   @relation("SubscriptionCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  checkoutSessions       CheckoutSession[]
+  paymentTransactions    PaymentTransaction[]
   hardwareActivationKeys HardwareActivationKey[]
 
   @@index([organizationId])
@@ -456,13 +458,13 @@ enum SubscriptionStatus {
 }
 
 model ParentStudentLink {
-  id             String   @id @default(uuid())
+  id             String                  @id @default(uuid())
   parentUserId   String
   studentUserId  String
   organizationId String
   status         ParentStudentLinkStatus @default(ACTIVE)
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  createdAt      DateTime                @default(now())
+  updatedAt      DateTime                @updatedAt
 
   parentUser   User         @relation("ParentLinks", fields: [parentUserId], references: [id], onDelete: Cascade)
   studentUser  User         @relation("StudentParentLinks", fields: [studentUserId], references: [id], onDelete: Cascade)
@@ -480,14 +482,14 @@ enum ParentStudentLinkStatus {
 }
 
 model AdminAuditLog {
-  id        String   @id @default(uuid())
+  id          String   @id @default(uuid())
   actorUserId String
-  action    String
-  targetType String
-  targetId   String?
-  summary   String?
-  metadata  Json?
-  createdAt DateTime @default(now())
+  action      String
+  targetType  String
+  targetId    String?
+  summary     String?
+  metadata    Json?
+  createdAt   DateTime @default(now())
 
   actorUser User @relation("AuditActor", fields: [actorUserId], references: [id], onDelete: Cascade)
 
@@ -496,19 +498,19 @@ model AdminAuditLog {
 }
 
 model OrganizationStorageConnection {
-  id               String   @id @default(uuid())
-  organizationId   String
-  provider         OrganizationStorageProvider
-  status           OrganizationStorageStatus @default(PENDING)
-  encryptedTokens  String?
+  id                   String                      @id @default(uuid())
+  organizationId       String
+  provider             OrganizationStorageProvider
+  status               OrganizationStorageStatus   @default(PENDING)
+  encryptedTokens      String?
   externalAccountEmail String?
-  rootFolderId     String?
-  connectedById    String?
-  validatedAt      DateTime?
-  disconnectedAt   DateTime?
-  lastError        String?
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
+  rootFolderId         String?
+  connectedById        String?
+  validatedAt          DateTime?
+  disconnectedAt       DateTime?
+  lastError            String?
+  createdAt            DateTime                    @default(now())
+  updatedAt            DateTime                    @updatedAt
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   connectedBy  User?        @relation("StorageConnectionsConnectedBy", fields: [connectedById], references: [id], onDelete: SetNull)
@@ -519,14 +521,14 @@ model OrganizationStorageConnection {
 }
 
 model PaymentProviderConfig {
-  id          String          @id @default(uuid())
-  provider    PaymentProvider @unique
-  enabled     Boolean         @default(false)
-  mode        PaymentProviderMode @default(TEST)
-  createdAt   DateTime        @default(now())
-  updatedAt   DateTime        @updatedAt
+  id        String              @id @default(uuid())
+  provider  PaymentProvider     @unique
+  enabled   Boolean             @default(false)
+  mode      PaymentProviderMode @default(TEST)
+  createdAt DateTime            @default(now())
+  updatedAt DateTime            @updatedAt
 
-  checkoutSessions CheckoutSession[]
+  checkoutSessions    CheckoutSession[]
   paymentTransactions PaymentTransaction[]
 
   @@map("payment_provider_configs")
@@ -542,26 +544,26 @@ enum PaymentProviderMode {
 }
 
 model CheckoutSession {
-  id             String   @id @default(uuid())
-  provider       PaymentProvider
+  id               String                @id @default(uuid())
+  provider         PaymentProvider
   providerConfigId String?
-  organizationId String?
-  subscriptionId String?
-  status         CheckoutSessionStatus @default(PENDING)
-  checkoutUrl    String?
-  amountMinor    Int
-  currency       String @default("INR")
-  metadata       Json   @default("{}")
-  createdById    String
-  expiresAt      DateTime?
-  completedAt    DateTime?
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  organizationId   String?
+  subscriptionId   String?
+  status           CheckoutSessionStatus @default(PENDING)
+  checkoutUrl      String?
+  amountMinor      Int
+  currency         String                @default("INR")
+  metadata         Json                  @default("{}")
+  createdById      String
+  expiresAt        DateTime?
+  completedAt      DateTime?
+  createdAt        DateTime              @default(now())
+  updatedAt        DateTime              @updatedAt
 
-  providerConfig PaymentProviderConfig? @relation(fields: [providerConfigId], references: [id], onDelete: SetNull)
-  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
-  subscription   Subscription? @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
-  createdBy      User @relation("CheckoutSessionsCreatedBy", fields: [createdById], references: [id], onDelete: Cascade)
+  providerConfig      PaymentProviderConfig? @relation(fields: [providerConfigId], references: [id], onDelete: SetNull)
+  organization        Organization?          @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  subscription        Subscription?          @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
+  createdBy           User                   @relation("CheckoutSessionsCreatedBy", fields: [createdById], references: [id], onDelete: Cascade)
   paymentTransactions PaymentTransaction[]
 
   @@index([organizationId])
@@ -578,30 +580,30 @@ enum CheckoutSessionStatus {
 }
 
 model PaymentTransaction {
-  id             String   @id @default(uuid())
-  provider       PaymentProvider
-  providerConfigId String?
+  id                String                   @id @default(uuid())
+  provider          PaymentProvider
+  providerConfigId  String?
   checkoutSessionId String?
-  organizationId String?
-  subscriptionId String?
-  status         PaymentTransactionStatus @default(PENDING)
-  amountMinor    Int
-  currency       String @default("INR")
+  organizationId    String?
+  subscriptionId    String?
+  status            PaymentTransactionStatus @default(PENDING)
+  amountMinor       Int
+  currency          String                   @default("INR")
   externalPaymentId String?
-  referenceNote  String?
-  invoiceNumber  String?
-  periodStart    DateTime?
-  periodEnd      DateTime?
-  metadata       Json @default("{}")
-  recordedById   String?
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  referenceNote     String?
+  invoiceNumber     String?
+  periodStart       DateTime?
+  periodEnd         DateTime?
+  metadata          Json                     @default("{}")
+  recordedById      String?
+  createdAt         DateTime                 @default(now())
+  updatedAt         DateTime                 @updatedAt
 
-  providerConfig PaymentProviderConfig? @relation(fields: [providerConfigId], references: [id], onDelete: SetNull)
-  checkoutSession CheckoutSession? @relation(fields: [checkoutSessionId], references: [id], onDelete: SetNull)
-  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
-  subscription   Subscription? @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
-  recordedBy     User? @relation("PaymentTransactionsRecordedBy", fields: [recordedById], references: [id], onDelete: SetNull)
+  providerConfig  PaymentProviderConfig? @relation(fields: [providerConfigId], references: [id], onDelete: SetNull)
+  checkoutSession CheckoutSession?       @relation(fields: [checkoutSessionId], references: [id], onDelete: SetNull)
+  organization    Organization?          @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  subscription    Subscription?          @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
+  recordedBy      User?                  @relation("PaymentTransactionsRecordedBy", fields: [recordedById], references: [id], onDelete: SetNull)
 
   @@index([organizationId])
   @@index([subscriptionId])
@@ -618,27 +620,27 @@ enum PaymentTransactionStatus {
 }
 
 model HardwareActivationKey {
-  id             String   @id @default(uuid())
-  organizationId String
-  subscriptionId String?
-  activationKeyHash String @unique
+  id                     String                      @id @default(uuid())
+  organizationId         String
+  subscriptionId         String?
+  activationKeyHash      String                      @unique
   activationKeyEncrypted String?
-  label          String?
-  status         HardwareActivationKeyStatus @default(AVAILABLE)
-  maxDevices     Int      @default(1)
-  assignedUserId String?
-  createdById    String
-  boundActivationId String?
-  expiresAt      DateTime?
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  label                  String?
+  status                 HardwareActivationKeyStatus @default(AVAILABLE)
+  maxDevices             Int                         @default(1)
+  assignedUserId         String?
+  createdById            String
+  boundActivationId      String?
+  expiresAt              DateTime?
+  createdAt              DateTime                    @default(now())
+  updatedAt              DateTime                    @updatedAt
 
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  subscription Subscription? @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
-  assignedUser User? @relation("HardwareKeysAssignedUser", fields: [assignedUserId], references: [id], onDelete: SetNull)
-  createdBy    User @relation("HardwareKeysCreatedBy", fields: [createdById], references: [id], onDelete: Cascade)
-  boundActivation HardwareActivation? @relation("BoundHardwareActivation", fields: [boundActivationId], references: [id], onDelete: SetNull)
-  activations HardwareActivation[] @relation("HardwareKeyActivations")
+  organization     Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  subscription     Subscription?        @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
+  assignedUser     User?                @relation("HardwareKeysAssignedUser", fields: [assignedUserId], references: [id], onDelete: SetNull)
+  createdBy        User                 @relation("HardwareKeysCreatedBy", fields: [createdById], references: [id], onDelete: Cascade)
+  boundActivation  HardwareActivation?  @relation("BoundHardwareActivation", fields: [boundActivationId], references: [id], onDelete: SetNull)
+  activations      HardwareActivation[] @relation("HardwareKeyActivations")
   aiCreditAccounts AiCreditAccount[]
 
   @@index([organizationId])
@@ -655,30 +657,30 @@ enum HardwareActivationKeyStatus {
 }
 
 model HardwareActivation {
-  id             String   @id @default(uuid())
-  activationKeyId String
-  userId         String?
-  organizationId String
+  id                    String                   @id @default(uuid())
+  activationKeyId       String
+  userId                String?
+  organizationId        String
   deviceFingerprintHash String
-  deviceLabel    String?
-  devicePlatform String?
-  deviceModel    String?
-  deviceOsVersion String?
-  deviceMeta     Json     @default("{}")
-  firstBoundAt   DateTime?
-  lastVerifiedAt DateTime?
-  status         HardwareActivationStatus @default(ACTIVE)
-  resetRequestedAt DateTime?
-  resetApprovedAt DateTime?
-  resetApprovedById String?
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  deviceLabel           String?
+  devicePlatform        String?
+  deviceModel           String?
+  deviceOsVersion       String?
+  deviceMeta            Json                     @default("{}")
+  firstBoundAt          DateTime?
+  lastVerifiedAt        DateTime?
+  status                HardwareActivationStatus @default(ACTIVE)
+  resetRequestedAt      DateTime?
+  resetApprovedAt       DateTime?
+  resetApprovedById     String?
+  createdAt             DateTime                 @default(now())
+  updatedAt             DateTime                 @updatedAt
 
-  activationKey HardwareActivationKey @relation("HardwareKeyActivations", fields: [activationKeyId], references: [id], onDelete: Cascade)
-  boundKeys HardwareActivationKey[] @relation("BoundHardwareActivation")
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  user      User? @relation("HardwareActivationsUser", fields: [userId], references: [id], onDelete: SetNull)
-  resetApprovedBy User? @relation("HardwareActivationsResetApprovedBy", fields: [resetApprovedById], references: [id], onDelete: SetNull)
+  activationKey   HardwareActivationKey   @relation("HardwareKeyActivations", fields: [activationKeyId], references: [id], onDelete: Cascade)
+  boundKeys       HardwareActivationKey[] @relation("BoundHardwareActivation")
+  organization    Organization            @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user            User?                   @relation("HardwareActivationsUser", fields: [userId], references: [id], onDelete: SetNull)
+  resetApprovedBy User?                   @relation("HardwareActivationsResetApprovedBy", fields: [resetApprovedById], references: [id], onDelete: SetNull)
 
   @@unique([activationKeyId, deviceFingerprintHash])
   @@index([organizationId])
@@ -694,22 +696,22 @@ enum HardwareActivationStatus {
 }
 
 model AiCreditAccount {
-  id             String   @id @default(uuid())
-  scope          AiCreditScope
-  organizationId String?
-  userId         String?
+  id                      String                @id @default(uuid())
+  scope                   AiCreditScope
+  organizationId          String?
+  userId                  String?
   hardwareActivationKeyId String?
-  balanceMinor   Int      @default(0)
-  includedMinor  Int      @default(70000)
-  currency       String   @default("INR")
-  status         AiCreditAccountStatus @default(ACTIVE)
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  balanceMinor            Int                   @default(0)
+  includedMinor           Int                   @default(70000)
+  currency                String                @default("INR")
+  status                  AiCreditAccountStatus @default(ACTIVE)
+  createdAt               DateTime              @default(now())
+  updatedAt               DateTime              @updatedAt
 
-  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  user         User? @relation("AiCreditAccountsUser", fields: [userId], references: [id], onDelete: Cascade)
+  organization          Organization?          @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user                  User?                  @relation("AiCreditAccountsUser", fields: [userId], references: [id], onDelete: Cascade)
   hardwareActivationKey HardwareActivationKey? @relation(fields: [hardwareActivationKeyId], references: [id], onDelete: SetNull)
-  ledgerEntries AiCreditLedgerEntry[]
+  ledgerEntries         AiCreditLedgerEntry[]
 
   @@index([organizationId])
   @@index([userId])
@@ -730,20 +732,20 @@ enum AiCreditAccountStatus {
 }
 
 model AiCreditLedgerEntry {
-  id             String   @id @default(uuid())
-  accountId      String
-  actorUserId    String?
-  type           AiCreditLedgerType
-  amountMinor    Int
+  id              String             @id @default(uuid())
+  accountId       String
+  actorUserId     String?
+  type            AiCreditLedgerType
+  amountMinor     Int
   oldBalanceMinor Int
   newBalanceMinor Int
-  reason         String?
-  referenceNote  String?
-  metadata       Json @default("{}")
-  createdAt      DateTime @default(now())
+  reason          String?
+  referenceNote   String?
+  metadata        Json               @default("{}")
+  createdAt       DateTime           @default(now())
 
   account   AiCreditAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
-  actorUser User? @relation("AiCreditLedgerActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+  actorUser User?           @relation("AiCreditLedgerActor", fields: [actorUserId], references: [id], onDelete: SetNull)
 
   @@index([accountId])
   @@index([actorUserId])
@@ -758,17 +760,17 @@ enum AiCreditLedgerType {
 }
 
 model TermsAcceptance {
-  id             String   @id @default(uuid())
-  userId         String
-  organizationId String?
-  documentType   TermsDocumentType
+  id              String            @id @default(uuid())
+  userId          String
+  organizationId  String?
+  documentType    TermsDocumentType
   documentVersion String
-  acceptedAt     DateTime @default(now())
-  ipAddress      String?
-  userAgent      String?
-  metadata       Json @default("{}")
+  acceptedAt      DateTime          @default(now())
+  ipAddress       String?
+  userAgent       String?
+  metadata        Json              @default("{}")
 
-  user User @relation("TermsAcceptancesUser", fields: [userId], references: [id], onDelete: Cascade)
+  user         User          @relation("TermsAcceptancesUser", fields: [userId], references: [id], onDelete: Cascade)
   organization Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
 
   @@index([userId])
@@ -782,32 +784,32 @@ enum TermsDocumentType {
 }
 
 model LiveSession {
-  id             String   @id @default(uuid())
-  canvasId       String
-  organizationId String?
-  title          String?
-  createdById    String
-  hostUserId     String?
-  status         LiveSessionStatus @default(SCHEDULED)
-  joinCode       String?
-  joinCodeHash   String?
-  joinCodeExpiresAt DateTime?
-  studentPermissions Json @default("{}")
-  startedAt      DateTime?
-  endedAt        DateTime?
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  id                 String            @id @default(uuid())
+  canvasId           String
+  organizationId     String?
+  title              String?
+  createdById        String
+  hostUserId         String?
+  status             LiveSessionStatus @default(SCHEDULED)
+  joinCode           String?
+  joinCodeHash       String?
+  joinCodeExpiresAt  DateTime?
+  studentPermissions Json              @default("{}")
+  startedAt          DateTime?
+  endedAt            DateTime?
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
 
-  canvas       Canvas      @relation(fields: [canvasId], references: [id], onDelete: Cascade)
-  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
-  createdBy    User        @relation("LiveSessionCreator", fields: [createdById], references: [id], onDelete: Cascade)
-  host         User?       @relation("LiveSessionHost", fields: [hostUserId], references: [id], onDelete: SetNull)
-  participants LiveSessionParticipant[]
-  invites      LiveSessionInvite[]
-  messages     LiveSessionMessage[]
-  mediaAssets  LiveSessionMediaAsset[]
-  recordings   LiveSessionRecording[]
-  events       LiveSessionEvent[]
+  canvas            Canvas                        @relation(fields: [canvasId], references: [id], onDelete: Cascade)
+  organization      Organization?                 @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  createdBy         User                          @relation("LiveSessionCreator", fields: [createdById], references: [id], onDelete: Cascade)
+  host              User?                         @relation("LiveSessionHost", fields: [hostUserId], references: [id], onDelete: SetNull)
+  participants      LiveSessionParticipant[]
+  invites           LiveSessionInvite[]
+  messages          LiveSessionMessage[]
+  mediaAssets       LiveSessionMediaAsset[]
+  recordings        LiveSessionRecording[]
+  events            LiveSessionEvent[]
   guestParticipants LiveSessionGuestParticipant[]
 
   @@index([canvasId])
@@ -824,11 +826,11 @@ enum LiveSessionStatus {
 }
 
 model LiveSessionParticipant {
-  id            String   @id @default(uuid())
+  id            String                     @id @default(uuid())
   liveSessionId String
   userId        String
   role          LiveSessionParticipantRole @default(STUDENT)
-  joinedAt      DateTime @default(now())
+  joinedAt      DateTime                   @default(now())
   leftAt        DateTime?
 
   liveSession LiveSession @relation(fields: [liveSessionId], references: [id], onDelete: Cascade)
@@ -840,20 +842,20 @@ model LiveSessionParticipant {
 }
 
 model LiveSessionGuestParticipant {
-  id             String   @id @default(uuid())
+  id             String                     @id @default(uuid())
   liveSessionId  String
   organizationId String?
   displayName    String?
-  joinTokenHash   String @unique
-  role            LiveSessionParticipantRole @default(STUDENT)
-  expiresAt       DateTime
-  joinedAt        DateTime?
-  leftAt          DateTime?
-  metadata        Json @default("{}")
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  joinTokenHash  String                     @unique
+  role           LiveSessionParticipantRole @default(STUDENT)
+  expiresAt      DateTime
+  joinedAt       DateTime?
+  leftAt         DateTime?
+  metadata       Json                       @default("{}")
+  createdAt      DateTime                   @default(now())
+  updatedAt      DateTime                   @updatedAt
 
-  liveSession  LiveSession @relation(fields: [liveSessionId], references: [id], onDelete: Cascade)
+  liveSession  LiveSession   @relation(fields: [liveSessionId], references: [id], onDelete: Cascade)
   organization Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
 
   @@index([liveSessionId])
@@ -869,7 +871,7 @@ enum LiveSessionParticipantRole {
 }
 
 model LiveSessionInvite {
-  id              String   @id @default(uuid())
+  id              String    @id @default(uuid())
   liveSessionId   String
   email           String
   invitedUserId   String?
@@ -878,8 +880,8 @@ model LiveSessionInvite {
   codeExpiresAt   DateTime
   usedAt          DateTime?
   downloadPageUrl String?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 
   liveSession LiveSession @relation(fields: [liveSessionId], references: [id], onDelete: Cascade)
   invitedUser User?       @relation("LiveSessionInviteUser", fields: [invitedUserId], references: [id], onDelete: SetNull)
@@ -892,15 +894,15 @@ model LiveSessionInvite {
 }
 
 model LiveSessionMessage {
-  id            String   @id @default(uuid())
-  liveSessionId String
-  senderUserId  String
-  type          LiveSessionMessageType @default(TEXT)
-  body          String?
-  attachmentUrl String?
+  id             String                 @id @default(uuid())
+  liveSessionId  String
+  senderUserId   String
+  type           LiveSessionMessageType @default(TEXT)
+  body           String?
+  attachmentUrl  String?
   attachmentName String?
-  metadata      Json?
-  createdAt     DateTime @default(now())
+  metadata       Json?
+  createdAt      DateTime               @default(now())
 
   liveSession LiveSession @relation(fields: [liveSessionId], references: [id], onDelete: Cascade)
   sender      User        @relation(fields: [senderUserId], references: [id], onDelete: Cascade)
@@ -917,7 +919,7 @@ enum LiveSessionMessageType {
 }
 
 model LiveSessionMediaAsset {
-  id            String   @id @default(uuid())
+  id            String               @id @default(uuid())
   liveSessionId String
   uploadedById  String
   kind          LiveSessionMediaKind @default(FILE)
@@ -927,7 +929,7 @@ model LiveSessionMediaAsset {
   storageKey    String
   publicUrl     String?
   metadata      Json?
-  createdAt     DateTime @default(now())
+  createdAt     DateTime             @default(now())
 
   liveSession LiveSession @relation(fields: [liveSessionId], references: [id], onDelete: Cascade)
 
@@ -944,16 +946,16 @@ enum LiveSessionMediaKind {
 }
 
 model LiveSessionRecording {
-  id            String   @id @default(uuid())
-  liveSessionId String
-  createdById   String
-  status        LiveSessionRecordingStatus @default(PROCESSING)
-  storageKey    String?
-  publicUrl     String?
+  id              String                     @id @default(uuid())
+  liveSessionId   String
+  createdById     String
+  status          LiveSessionRecordingStatus @default(PROCESSING)
+  storageKey      String?
+  publicUrl       String?
   durationSeconds Int?
-  metadata      Json?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  metadata        Json?
+  createdAt       DateTime                   @default(now())
+  updatedAt       DateTime                   @updatedAt
 
   liveSession LiveSession @relation(fields: [liveSessionId], references: [id], onDelete: Cascade)
   createdBy   User        @relation(fields: [createdById], references: [id], onDelete: Cascade)
@@ -984,14 +986,14 @@ model LiveSessionEvent {
 }
 
 model OAuthConnection {
-  id              String   @id @default(uuid())
+  id              String        @id @default(uuid())
   userId          String
   provider        OAuthProvider
   encryptedTokens String
   scopes          String?
   expiresAt       DateTime?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -1024,16 +1026,16 @@ model LmsConnection {
 }
 
 model LmsSyncJob {
-  id              String   @id @default(uuid())
-  userId          String
-  connectionId    String?
-  liveSessionId   String?
-  status          String   @default("PENDING")
-  direction       String   @default("EXPORT")
-  payload         Json?
-  errorMessage    String?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  id            String   @id @default(uuid())
+  userId        String
+  connectionId  String?
+  liveSessionId String?
+  status        String   @default("PENDING")
+  direction     String   @default("EXPORT")
+  payload       Json?
+  errorMessage  String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
   user       User           @relation(fields: [userId], references: [id], onDelete: Cascade)
   connection LmsConnection? @relation(fields: [connectionId], references: [id], onDelete: SetNull)
@@ -1102,9 +1104,9 @@ model SupportThread {
   createdAt        DateTime            @default(now())
   updatedAt        DateTime            @updatedAt
 
-  organization Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  openedBy     User                @relation("SupportThreadsOpened", fields: [openedByUserId], references: [id], onDelete: Cascade)
-  resolvedBy   User?               @relation("SupportThreadsResolved", fields: [resolvedByUserId], references: [id], onDelete: SetNull)
+  organization Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  openedBy     User                 @relation("SupportThreadsOpened", fields: [openedByUserId], references: [id], onDelete: Cascade)
+  resolvedBy   User?                @relation("SupportThreadsResolved", fields: [resolvedByUserId], references: [id], onDelete: SetNull)
   messages     SupportMessage[]
   events       SupportThreadEvent[]
 

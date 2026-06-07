@@ -1,8 +1,12 @@
 import { AppError } from './AppError';
 
 export class AuthError extends AppError {
-  constructor(message = 'Authentication failed', statusCode = 401) {
-    super(message, statusCode);
+  constructor(
+    message = 'Authentication failed',
+    statusCode = 401,
+    details?: Record<string, unknown>,
+  ) {
+    super(message, statusCode, true, undefined, details);
     Object.setPrototypeOf(this, AuthError.prototype);
   }
 
@@ -22,10 +26,11 @@ export class AuthError extends AppError {
     return new AuthError('You are not authorized to access this resource', 403);
   }
 
-  static accountSuspended(): AuthError {
+  static accountSuspended(details?: Record<string, unknown>): AuthError {
     return new AuthError(
       'Your account has been suspended. Please contact your administrator.',
       403,
+      details,
     );
   }
 

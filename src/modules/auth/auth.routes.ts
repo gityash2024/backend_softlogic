@@ -7,9 +7,13 @@ import {
 } from '@/shared/middleware/auth.middleware';
 import {
   adminLoginSchema,
+  changePasswordWithCurrentSchema,
   changePasswordSchema,
   completePasswordSetupSchema,
   googleSignInSchema,
+  passwordResetOtpCompleteSchema,
+  passwordResetOtpRequestSchema,
+  passwordResetOtpVerifySchema,
   passwordResetRequestSchema,
   passwordSetupTokenSchema,
   refreshTokenSchema,
@@ -126,11 +130,36 @@ router.post(
   authController.changePassword,
 );
 router.post(
+  '/password/change-with-current',
+  authRateLimiter,
+  validate(changePasswordWithCurrentSchema),
+  authController.changePasswordWithCurrent,
+);
+router.post(
   '/admin/password-reset/request',
   authRateLimiter,
   passwordResetEmailLimiter,
   validate(passwordResetRequestSchema),
   authController.requestPasswordReset,
+);
+router.post(
+  '/password-reset/request-otp',
+  authRateLimiter,
+  passwordResetEmailLimiter,
+  validate(passwordResetOtpRequestSchema),
+  authController.requestPasswordResetOtp,
+);
+router.post(
+  '/password-reset/verify-otp',
+  authRateLimiter,
+  validate(passwordResetOtpVerifySchema),
+  authController.verifyPasswordResetOtp,
+);
+router.post(
+  '/password-reset/complete-otp',
+  authRateLimiter,
+  validate(passwordResetOtpCompleteSchema),
+  authController.completePasswordResetOtp,
 );
 
 /**

@@ -1,9 +1,13 @@
-import { Request, Response, NextFunction } from 'express';
-import { UserRole } from '@prisma/client';
-import { prisma } from '@/config';
-import { ApiResponse } from '@/shared/utils/api-response';
-import { AppError } from '@/shared/errors/AppError';
-import { getSkipTake, getPaginationMeta, paginationSchema } from '@/shared/utils/pagination';
+import { Request, Response, NextFunction } from "express";
+import { Prisma, UserRole } from "@prisma/client";
+import { prisma } from "@/config";
+import { ApiResponse } from "@/shared/utils/api-response";
+import { AppError } from "@/shared/errors/AppError";
+import {
+  getSkipTake,
+  getPaginationMeta,
+  paginationSchema,
+} from "@/shared/utils/pagination";
 import {
   canvasAccessMetadata,
   canvasReadWhere,
@@ -11,14 +15,17 @@ import {
   ensureCanvasWriteAccess,
   ensureOrganizationManaged,
   isAdminRole,
-} from '@/shared/utils/access-control';
+} from "@/shared/utils/access-control";
 
 export class CanvasController {
   async list(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const { page, perPage } = paginationSchema.parse(req.query);
       const { skip, take } = getSkipTake(page, perPage);
-      const organizationId = typeof req.query.organizationId === 'string' ? req.query.organizationId : '';
+      const organizationId =
+        typeof req.query.organizationId === "string"
+          ? req.query.organizationId
+          : "";
       const scopedWhere = await canvasReadWhere(req.user!);
       const where = organizationId
         ? { AND: [scopedWhere, { organizationId }] }
@@ -29,7 +36,7 @@ export class CanvasController {
           where,
           skip,
           take,
-          orderBy: { updatedAt: 'desc' },
+          orderBy: { updatedAt: "desc" },
           include: {
             _count: { select: { slides: true } },
             organization: { select: { id: true, name: true } },
@@ -47,62 +54,158 @@ export class CanvasController {
       );
 
       ApiResponse.paginated(res, decoratedCanvases, total, page, perPage);
-    } catch (error) { next(error); }
+    } catch (error) {
+      next(error);
+    }
   }
 
   async create(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       if (req.user!.role !== UserRole.TEACHER && !isAdminRole(req.user!.role)) {
-        throw new AppError('Only teachers and admins can create whiteboards', 403);
+        throw new AppError(
+          "Only teachers and admins can create whiteboards",
+          403,
+        );
       }
 
       const { name, description, metadata } = req.body;
+      const clientDraftId =
+        typeof req.body.clientDraftId === "string" &&
+        req.body.clientDraftId.trim().length > 0
+          ? req.body.clientDraftId.trim()
+          : null;
       const requestedOrganizationId =
-        typeof req.body.organizationId === 'string' && req.body.organizationId.trim().length > 0
+        typeof req.body.organizationId === "string" &&
+        req.body.organizationId.trim().length > 0
           ? req.body.organizationId.trim()
           : null;
       let organizationId = req.user?.organizationId ?? null;
 
       if (isAdminRole(req.user!.role)) {
         if (requestedOrganizationId) {
-          const organization = await ensureOrganizationManaged(requestedOrganizationId, req.user!);
+          const organization = await ensureOrganizationManaged(
+            requestedOrganizationId,
+            req.user!,
+          );
           organizationId = organization.id;
         } else {
           organizationId = req.user?.organizationId ?? null;
         }
       }
 
-      const canvas = await prisma.canvas.create({
-        data: {
-          userId: req.user!.userId,
-          organizationId,
-          name: name || 'Untitled Canvas',
-          description,
-          metadata: metadata ?? undefined,
-          slides: { create: { order: 0, name: 'Slide 1' } },
-        },
-        include: {
-          slides: true,
-          organization: { select: { id: true, name: true } },
-          user: { select: { id: true, name: true, email: true } },
-        },
-      });
-      ApiResponse.created(
-        res,
-        { ...canvas, access: await canvasAccessMetadata(canvas, req.user!) },
-        'Canvas created',
-      );
-    } catch (error) { next(error); }
+      if (clientDraftId) {
+        const existing = await prisma.canvas.findFirst({
+          where: {
+            userId: req.user!.userId,
+            clientDraftId,
+            deletedAt: null,
+          },
+          include: {
+            slides: true,
+            organization: { select: { id: true, name: true } },
+            user: { select: { id: true, name: true, email: true } },
+          },
+        });
+
+        if (existing) {
+          ApiResponse.success(
+            res,
+            {
+              ...existing,
+              access: await canvasAccessMetadata(existing, req.user!),
+            },
+            "Canvas already exists for draft",
+          );
+          return;
+        }
+      }
+
+      try {
+        const canvas = await prisma.canvas.create({
+          data: {
+            userId: req.user!.userId,
+            organizationId,
+            name: name || "Untitled Canvas",
+            description,
+            metadata: metadata ?? undefined,
+            clientDraftId: clientDraftId ?? undefined,
+            slides: { create: { order: 0, name: "Slide 1" } },
+          },
+          include: {
+            slides: true,
+            organization: { select: { id: true, name: true } },
+            user: { select: { id: true, name: true, email: true } },
+          },
+        });
+        ApiResponse.created(
+          res,
+          { ...canvas, access: await canvasAccessMetadata(canvas, req.user!) },
+          "Canvas created",
+        );
+      } catch (error) {
+        if (clientDraftId && this.isClientDraftUniqueConflict(error)) {
+          const existing = await prisma.canvas.findFirst({
+            where: {
+              userId: req.user!.userId,
+              clientDraftId,
+              deletedAt: null,
+            },
+            include: {
+              slides: true,
+              organization: { select: { id: true, name: true } },
+              user: { select: { id: true, name: true, email: true } },
+            },
+          });
+
+          if (existing) {
+            ApiResponse.success(
+              res,
+              {
+                ...existing,
+                access: await canvasAccessMetadata(existing, req.user!),
+              },
+              "Canvas already exists for draft",
+            );
+            return;
+          }
+        }
+
+        throw error;
+      }
+    } catch (error) {
+      next(error);
+    }
   }
 
-  async getById(req: Request, res: Response, next: NextFunction): Promise<void> {
+  private isClientDraftUniqueConflict(error: unknown): boolean {
+    if (
+      !(error instanceof Prisma.PrismaClientKnownRequestError) ||
+      error.code !== "P2002"
+    ) {
+      return false;
+    }
+    const target = error.meta?.target;
+    return (
+      Array.isArray(target) &&
+      target.includes("userId") &&
+      target.includes("clientDraftId")
+    );
+  }
+
+  async getById(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
     try {
       const canvas = await ensureCanvasAccess(req.params.id, req.user!);
-      ApiResponse.success(
-        res,
-        { ...canvas, access: await canvasAccessMetadata(canvas, req.user!) },
-      );
-    } catch (error) { next(error); }
+      ApiResponse.success(res, {
+        ...canvas,
+        access: await canvasAccessMetadata(canvas, req.user!),
+      });
+    } catch (error) {
+      next(error);
+    }
   }
 
   async update(req: Request, res: Response, next: NextFunction): Promise<void> {
@@ -118,7 +221,7 @@ export class CanvasController {
           metadata: metadata ?? undefined,
         },
       });
-      if (canvas.count === 0) throw new AppError('Canvas not found', 404);
+      if (canvas.count === 0) throw new AppError("Canvas not found", 404);
       const updated = await prisma.canvas.findUnique({
         where: { id: req.params.id },
         include: {
@@ -130,11 +233,16 @@ export class CanvasController {
       ApiResponse.success(
         res,
         updated
-          ? { ...updated, access: await canvasAccessMetadata(updated, req.user!) }
+          ? {
+              ...updated,
+              access: await canvasAccessMetadata(updated, req.user!),
+            }
           : updated,
-        'Canvas updated',
+        "Canvas updated",
       );
-    } catch (error) { next(error); }
+    } catch (error) {
+      next(error);
+    }
   }
 
   async delete(req: Request, res: Response, next: NextFunction): Promise<void> {
@@ -144,9 +252,11 @@ export class CanvasController {
         where: { id: req.params.id },
         data: { deletedAt: new Date() },
       });
-      if (result.count === 0) throw new AppError('Canvas not found', 404);
-      ApiResponse.success(res, null, 'Canvas deleted');
-    } catch (error) { next(error); }
+      if (result.count === 0) throw new AppError("Canvas not found", 404);
+      ApiResponse.success(res, null, "Canvas deleted");
+    } catch (error) {
+      next(error);
+    }
   }
 }
 

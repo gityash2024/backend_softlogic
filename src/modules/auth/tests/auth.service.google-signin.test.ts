@@ -5,6 +5,9 @@ jest.mock('@/modules/auth/auth.repository', () => ({
     createSession: jest.fn(),
     createUser: jest.fn(),
     deleteSession: jest.fn(),
+    findActiveSuperAdminEmail: jest.fn(),
+    findDeletedUserByEmail: jest.fn(),
+    findOrganizationContactById: jest.fn(),
     findSessionByToken: jest.fn(),
     findUserByEmail: jest.fn(),
     findUserByGoogleId: jest.fn(),
@@ -88,6 +91,11 @@ describe('AuthService Google Sign-In', () => {
     });
     mockedFindUserContextById.mockResolvedValue(safeUserContext as any);
     mockedAuthRepository.createSession.mockResolvedValue({} as any);
+    mockedAuthRepository.findActiveSuperAdminEmail.mockResolvedValue(
+      'superadmin@softlogicwhiteboard.com',
+    );
+    mockedAuthRepository.findDeletedUserByEmail.mockResolvedValue(null);
+    mockedAuthRepository.findOrganizationContactById.mockResolvedValue(null);
   });
 
   it('links an existing email user to the Google account and creates a session', async () => {
@@ -185,8 +193,14 @@ describe('AuthService Google Sign-In', () => {
     } as any);
 
     await expect(authService.googleSignIn('google-id-token')).rejects.toMatchObject({
-      message: 'Invalid credentials',
-      statusCode: 401,
+      message: 'Your account has been suspended. Please contact your administrator.',
+      statusCode: 403,
+      details: {
+        reason: 'ACCOUNT_SUSPENDED',
+        contact: {
+          superAdminEmail: 'superadmin@softlogicwhiteboard.com',
+        },
+      },
     });
 
     expect(mockedAuthRepository.updateUser).not.toHaveBeenCalled();
@@ -214,8 +228,14 @@ describe('AuthService Google Sign-In', () => {
     } as any);
 
     await expect(authService.googleSignIn('google-id-token')).rejects.toMatchObject({
-      message: 'Invalid credentials',
-      statusCode: 401,
+      message: 'Your account has been suspended. Please contact your administrator.',
+      statusCode: 403,
+      details: {
+        reason: 'ACCOUNT_SUSPENDED',
+        contact: {
+          superAdminEmail: 'superadmin@softlogicwhiteboard.com',
+        },
+      },
     });
 
     expect(mockedAuthRepository.findUserByEmail).not.toHaveBeenCalled();

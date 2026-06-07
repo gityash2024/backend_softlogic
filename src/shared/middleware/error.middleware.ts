@@ -22,7 +22,7 @@ export const errorMiddleware = (
   if (err instanceof AppError) {
     res.status(err.statusCode).json({
       success: false,
-      data: null,
+      data: err.details ?? null,
       message: err.message,
       ...(err.code ? { code: err.code } : {}),
     });

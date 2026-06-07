@@ -318,10 +318,76 @@ export class AuthController {
     }
   }
 
+  async changePasswordWithCurrent(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
+    try {
+      const { email, currentPassword, newPassword } = req.body;
+      const result = await authService.changePasswordWithCurrent(
+        email,
+        currentPassword,
+        newPassword,
+        req.ip,
+      );
+      ApiResponse.success(res, result, 'Password changed successfully');
+    } catch (error) {
+      next(error);
+    }
+  }
+
   async requestPasswordReset(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const { email } = req.body;
       const result = await authService.requestPasswordReset(email, req.ip);
+      ApiResponse.success(res, result, result.message);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async requestPasswordResetOtp(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
+    try {
+      const { email } = req.body;
+      const result = await authService.requestPasswordResetOtp(email, req.ip);
+      ApiResponse.success(res, result, result.message);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async verifyPasswordResetOtp(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
+    try {
+      const { email, code } = req.body;
+      const result = await authService.verifyPasswordResetOtp(email, code);
+      ApiResponse.success(res, result, result.message);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async completePasswordResetOtp(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
+    try {
+      const { email, code, newPassword } = req.body;
+      const result = await authService.completePasswordResetOtp(
+        email,
+        code,
+        newPassword,
+        req.ip,
+      );
       ApiResponse.success(res, result, result.message);
     } catch (error) {
       next(error);

@@ -60,6 +60,37 @@ export class AuthRepository {
     });
   }
 
+  async findActiveSuperAdminEmail(): Promise<string | null> {
+    const superAdmin = await prisma.user.findFirst({
+      where: {
+        deletedAt: null,
+        email: { not: '' },
+        role: 'SUPER_ADMIN',
+        status: 'ACTIVE',
+      },
+      orderBy: { createdAt: 'asc' },
+      select: { email: true },
+    });
+    return superAdmin?.email ?? null;
+  }
+
+  async findOrganizationContactById(
+    organizationId: string,
+  ): Promise<{
+    name: string;
+    supportEmail: string | null;
+    supportPhone: string | null;
+  } | null> {
+    return prisma.organization.findFirst({
+      where: { id: organizationId, deletedAt: null },
+      select: {
+        name: true,
+        supportEmail: true,
+        supportPhone: true,
+      },
+    });
+  }
+
   async createUser(data: Prisma.UserCreateInput): Promise<User> {
     return prisma.user.create({ data });
   }

@@ -1,8 +1,10 @@
 import {
   GoogleDesktopAuthAttempt,
   GoogleDesktopAuthAttemptStatus,
+  Otp,
   OtpType,
   Prisma,
+  User,
   UserRole,
   UserStatus,
 } from '@prisma/client';
@@ -98,8 +100,35 @@ export class AuthService {
   private async noActiveAccountError(email: string): Promise<AuthError> {
     const suspended = await authRepository.findDeletedUserByEmail(email);
     return suspended
-      ? AuthError.accountSuspended()
+      ? AuthError.accountSuspended(await this.suspendedAccountDetails(suspended))
       : AuthError.invalidCredentials();
+  }
+
+  private async suspendedAccountDetails(
+    user: Pick<User, 'primaryOrganizationId'>,
+  ): Promise<Record<string, unknown>> {
+    const [superAdminEmail, organization] = await Promise.all([
+      authRepository.findActiveSuperAdminEmail(),
+      user.primaryOrganizationId
+        ? authRepository.findOrganizationContactById(user.primaryOrganizationId)
+        : Promise.resolve(null),
+    ]);
+
+    return {
+      reason: 'ACCOUNT_SUSPENDED',
+      contact: {
+        superAdminEmail: superAdminEmail ?? null,
+        organizationName: organization?.name ?? null,
+        supportEmail: organization?.supportEmail ?? null,
+        supportPhone: organization?.supportPhone ?? null,
+      },
+    };
+  }
+
+  private async accountSuspendedError(
+    user: Pick<User, 'primaryOrganizationId'>,
+  ): Promise<AuthError> {
+    return AuthError.accountSuspended(await this.suspendedAccountDetails(user));
   }
 
   async sendOtp(email: string): Promise<{ message: string }> {
@@ -108,7 +137,7 @@ export class AuthService {
       throw await this.noActiveAccountError(email);
     }
     if (user.status !== UserStatus.ACTIVE) {
-      throw AuthError.accountSuspended();
+      throw await this.accountSuspendedError(user);
     }
 
     const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
@@ -162,7 +191,7 @@ export class AuthService {
       throw await this.noActiveAccountError(email);
     }
     if (user.status !== UserStatus.ACTIVE) {
-      throw AuthError.accountSuspended();
+      throw await this.accountSuspendedError(user);
     }
 
     const otp = await authRepository.findLatestOtp(user.id, OtpType.EMAIL_LOGIN);
@@ -291,7 +320,7 @@ export class AuthService {
     }
 
     if (user.status !== UserStatus.ACTIVE) {
-      throw AuthError.accountSuspended();
+      throw await this.accountSuspendedError(user);
     }
     await licensingService.assertOrganizationCanLogin(user.id);
 
@@ -342,13 +371,13 @@ export class AuthService {
 
     let user = await authRepository.findUserByGoogleId(googleUser.sub);
     if (user && user.status !== UserStatus.ACTIVE) {
-      throw AuthError.accountSuspended();
+      throw await this.accountSuspendedError(user);
     }
 
     if (!user) {
       const existingUser = await authRepository.findUserByEmail(googleEmail);
       if (existingUser && existingUser.status !== UserStatus.ACTIVE) {
-        throw AuthError.accountSuspended();
+        throw await this.accountSuspendedError(existingUser);
       }
 
       if (existingUser) {
@@ -966,6 +995,221 @@ export class AuthService {
     }
 
     return { message: 'Password changed successfully' };
+  }
+
+  async changePasswordWithCurrent(
+    email: string,
+    currentPassword: string,
+    newPassword: string,
+    ipAddress?: string,
+  ): Promise<{ message: string }> {
+    const normalizedEmail = email.trim().toLowerCase();
+    const user = await authRepository.findUserByEmail(normalizedEmail);
+    if (!user || !user.passwordHash || !PASSWORD_LOGIN_ROLES.includes(user.role)) {
+      throw new AppError('Current password is incorrect', 400);
+    }
+    if (user.status !== UserStatus.ACTIVE) {
+      throw await this.accountSuspendedError(user);
+    }
+
+    const matches = await bcrypt.compare(currentPassword, user.passwordHash);
+    if (!matches) {
+      throw new AppError('Current password is incorrect', 400);
+    }
+
+    const passwordHash = await bcrypt.hash(newPassword, 10);
+    await authRepository.updateUser(user.id, {
+      isEmailVerified: true,
+      passwordHash,
+    });
+    await authRepository.deleteAllUserSessions(user.id);
+
+    try {
+      await writeAuditLog({
+        actorUserId: user.id,
+        action: 'auth.password.change_with_current',
+        targetType: 'user',
+        targetId: user.id,
+        summary: 'User changed password using current password from reset flow',
+        ip: ipAddress,
+      });
+    } catch {
+      // Never block the request on audit failure.
+    }
+
+    try {
+      await sendPasswordChangedEmail({
+        to: user.email,
+        name: user.name,
+        role: user.role,
+      });
+    } catch {
+      // Fire-and-forget — email failure must not break the password change.
+    }
+
+    return { message: 'Password changed successfully' };
+  }
+
+  async requestPasswordResetOtp(
+    email: string,
+    ipAddress?: string,
+  ): Promise<{ message: string }> {
+    const genericMessage =
+      'If the email matches a SoftLogic account, a password reset code has been sent.';
+    const normalizedEmail = email.trim().toLowerCase();
+    if (!normalizedEmail) {
+      return { message: genericMessage };
+    }
+
+    const user = await authRepository.findUserByEmail(normalizedEmail);
+    if (!user || !user.passwordHash || !PASSWORD_LOGIN_ROLES.includes(user.role)) {
+      return { message: genericMessage };
+    }
+    if (user.status !== UserStatus.ACTIVE) {
+      throw await this.accountSuspendedError(user);
+    }
+
+    const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+    const recentOtpCount = await authRepository.countRecentOtps(
+      user.id,
+      OtpType.PASSWORD_RESET,
+      oneHourAgo,
+    );
+    if (!this.shouldRelaxAuthLimits && recentOtpCount >= MAX_OTP_SENDS_PER_HOUR) {
+      throw AuthError.rateLimited();
+    }
+
+    await authRepository.invalidateUserOtps(user.id, OtpType.PASSWORD_RESET);
+
+    const otpCode = generateOtp();
+    const hashedOtp = await hashOtp(otpCode);
+    const expiresAt = new Date(Date.now() + OTP_EXPIRY_MINUTES * 60 * 1000);
+
+    await authRepository.createOtp({
+      userId: user.id,
+      code: hashedOtp,
+      type: OtpType.PASSWORD_RESET,
+      expiresAt,
+    });
+
+    try {
+      await writeAuditLog({
+        actorUserId: user.id,
+        action: 'auth.password_reset_otp.request',
+        targetType: 'user',
+        targetId: user.id,
+        summary: 'User requested a password reset OTP',
+        ip: ipAddress,
+      });
+    } catch {
+      // Never block the request on audit failure.
+    }
+
+    try {
+      const brandLogoAttachments = getBrandLogoEmailAttachments();
+      await sendEmail({
+        attachments:
+          brandLogoAttachments.length > 0 ? brandLogoAttachments : undefined,
+        to: user.email,
+        subject: 'Your Softlogic Whiteboard Password Reset Code',
+        html: getOtpEmailHtml(otpCode),
+      });
+    } catch {
+      console.log(`Password reset OTP for ${user.email}: ${otpCode}`);
+    }
+
+    return { message: genericMessage };
+  }
+
+  async verifyPasswordResetOtp(
+    email: string,
+    code: string,
+  ): Promise<{ message: string }> {
+    await this.assertValidPasswordResetOtp(email, code);
+    return { message: 'OTP verified successfully' };
+  }
+
+  async completePasswordResetOtp(
+    email: string,
+    code: string,
+    newPassword: string,
+    ipAddress?: string,
+  ): Promise<{ message: string }> {
+    const { user, otp } = await this.assertValidPasswordResetOtp(email, code);
+    const passwordHash = await bcrypt.hash(newPassword, 10);
+
+    await authRepository.updateUser(user.id, {
+      isEmailVerified: true,
+      passwordHash,
+    });
+    await authRepository.markOtpUsed(otp.id);
+    await authRepository.deleteAllUserSessions(user.id);
+
+    try {
+      await writeAuditLog({
+        actorUserId: user.id,
+        action: 'auth.password_reset_otp.complete',
+        targetType: 'user',
+        targetId: user.id,
+        summary: 'User completed password reset with OTP',
+        ip: ipAddress,
+      });
+    } catch {
+      // Never block the request on audit failure.
+    }
+
+    try {
+      await sendPasswordChangedEmail({
+        to: user.email,
+        name: user.name,
+        role: user.role,
+      });
+    } catch {
+      // Fire-and-forget — email failure must not break the password reset.
+    }
+
+    return { message: 'Password changed successfully' };
+  }
+
+  private async assertValidPasswordResetOtp(
+    email: string,
+    code: string,
+  ): Promise<{ user: User; otp: Otp }> {
+    const normalizedEmail = email.trim().toLowerCase();
+    const user = await authRepository.findUserByEmail(normalizedEmail);
+    if (!user || !user.passwordHash || !PASSWORD_LOGIN_ROLES.includes(user.role)) {
+      throw AuthError.otpInvalid();
+    }
+    if (user.status !== UserStatus.ACTIVE) {
+      throw await this.accountSuspendedError(user);
+    }
+
+    const otp = await authRepository.findLatestOtp(user.id, OtpType.PASSWORD_RESET);
+    if (!otp) {
+      throw AuthError.otpInvalid();
+    }
+
+    if (new Date() > otp.expiresAt) {
+      throw AuthError.otpExpired();
+    }
+
+    if (!this.shouldRelaxAuthLimits && otp.attempts >= MAX_OTP_ATTEMPTS) {
+      throw AuthError.otpMaxAttempts();
+    }
+
+    const normalizedCode = code.trim();
+    const isFixedOtpMatch =
+      this.fixedOtpCode != null &&
+      normalizedCode == this.fixedOtpCode &&
+      this.shouldUseFixedOtpForEmail(normalizedEmail);
+    const isValid =
+      isFixedOtpMatch || (await verifyOtpHash(normalizedCode, otp.code));
+    if (!isValid) {
+      await authRepository.incrementOtpAttempts(otp.id);
+      throw AuthError.otpInvalid();
+    }
+
+    return { user, otp };
   }
 
   async resendOtp(email: string): Promise<{ message: string }> {

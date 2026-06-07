@@ -16,6 +16,10 @@ jest.mock('@/modules/auth/auth.service', () => ({
     refreshToken: jest.fn(),
     logout: jest.fn(),
     resendOtp: jest.fn(),
+    changePasswordWithCurrent: jest.fn(),
+    requestPasswordResetOtp: jest.fn(),
+    verifyPasswordResetOtp: jest.fn(),
+    completePasswordResetOtp: jest.fn(),
     completePasswordSetup: jest.fn(),
   },
 }));
@@ -255,6 +259,89 @@ describe('Auth Module', () => {
         password: ['Include at least one number'],
       });
       expect(mockedAuthService.completePasswordSetup).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('password reset OTP routes', () => {
+    it('requests a password reset OTP with normalized email', async () => {
+      mockedAuthService.requestPasswordResetOtp.mockResolvedValue({
+        message:
+          'If the email matches a SoftLogic account, a password reset code has been sent.',
+      });
+
+      const response = await request(app)
+        .post('/api/v1/auth/password-reset/request-otp')
+        .send({ email: '  Teacher@SoftlogicWhiteboard.com  ' });
+
+      expect(response.status).toBe(200);
+      expect(response.body.success).toBe(true);
+      expect(mockedAuthService.requestPasswordResetOtp).toHaveBeenCalledWith(
+        'teacher@softlogicwhiteboard.com',
+        expect.any(String),
+      );
+    });
+
+    it('verifies a reset OTP before allowing the password step', async () => {
+      mockedAuthService.verifyPasswordResetOtp.mockResolvedValue({
+        message: 'OTP verified successfully',
+      });
+
+      const response = await request(app)
+        .post('/api/v1/auth/password-reset/verify-otp')
+        .send({ email: 'teacher@softlogicwhiteboard.com', code: '1234' });
+
+      expect(response.status).toBe(200);
+      expect(response.body.success).toBe(true);
+      expect(mockedAuthService.verifyPasswordResetOtp).toHaveBeenCalledWith(
+        'teacher@softlogicwhiteboard.com',
+        '1234',
+      );
+    });
+
+    it('completes reset OTP password change with a strong new password', async () => {
+      mockedAuthService.completePasswordResetOtp.mockResolvedValue({
+        message: 'Password changed successfully',
+      });
+
+      const response = await request(app)
+        .post('/api/v1/auth/password-reset/complete-otp')
+        .send({
+          email: 'teacher@softlogicwhiteboard.com',
+          code: '1234',
+          newPassword: 'newpass1',
+        });
+
+      expect(response.status).toBe(200);
+      expect(response.body.success).toBe(true);
+      expect(mockedAuthService.completePasswordResetOtp).toHaveBeenCalledWith(
+        'teacher@softlogicwhiteboard.com',
+        '1234',
+        'newpass1',
+        expect.any(String),
+      );
+    });
+
+    it('changes password with current password for public reset flow', async () => {
+      mockedAuthService.changePasswordWithCurrent.mockResolvedValue({
+        message: 'Password changed successfully',
+      });
+
+      const response = await request(app)
+        .post('/api/v1/auth/password/change-with-current')
+        .send({
+          email: 'teacher@softlogicwhiteboard.com',
+          currentPassword: 'oldpass1',
+          newPassword: 'newpass1',
+        });
+
+      expect(response.status).toBe(200);
+      expect(response.body.success).toBe(true);
+      expect(mockedAuthService.changePasswordWithCurrent).toHaveBeenCalledWith(
+        'teacher@softlogicwhiteboard.com',
+        'oldpass1',
+        'newpass1',
+        expect.any(String),
+      );
     });
   });
 });

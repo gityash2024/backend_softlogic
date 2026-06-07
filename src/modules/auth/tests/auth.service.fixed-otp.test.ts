@@ -18,6 +18,7 @@ jest.mock('@/modules/auth/auth.repository', () => ({
     findUserSessionByClientSessionId: jest.fn(),
     createSession: jest.fn(),
     deleteSession: jest.fn(),
+    deleteAllUserSessions: jest.fn(),
     updateSession: jest.fn(),
   },
 }));
@@ -47,6 +48,11 @@ jest.mock('@/shared/utils/email', () => ({
     },
   ]),
   getOtpEmailHtml: jest.fn(() => '<p>otp</p>'),
+  sendPasswordChangedEmail: jest.fn(),
+}));
+
+jest.mock('@/shared/utils/audit', () => ({
+  writeAuditLog: jest.fn(),
 }));
 
 jest.mock('@/shared/utils/otp', () => ({
@@ -98,6 +104,7 @@ const activeUser = {
   lastLoginAt: null,
   googleId: null,
   isEmailVerified: true,
+  passwordHash: 'hashed-password',
   primaryOrganizationId: null,
 };
 
@@ -161,6 +168,7 @@ describe('AuthService fixed OTP allowlist', () => {
     mockedAuthRepository.findUserSessionByClientSessionId.mockResolvedValue(null);
     mockedAuthRepository.createSession.mockResolvedValue({} as any);
     mockedAuthRepository.deleteSession.mockResolvedValue(undefined as any);
+    mockedAuthRepository.deleteAllUserSessions.mockResolvedValue(undefined as any);
     mockedAuthRepository.updateSession.mockResolvedValue({} as any);
     mockedFindUserContextById.mockResolvedValue(safeUserContext as any);
     mockedGenerateTokenPair.mockReturnValue({
@@ -244,6 +252,81 @@ describe('AuthService fixed OTP allowlist', () => {
       authService.verifyOtp('admin@softlogicwhiteboard.com', '1234'),
     ).rejects.toThrow(AuthError.otpInvalid());
 
+    expect(mockedAuthRepository.markOtpUsed).not.toHaveBeenCalled();
+  });
+
+  it('accepts 1234 for password reset verification with an active reset OTP request', async () => {
+    mockedAuthRepository.findLatestOtp.mockResolvedValue({
+      ...activeOtp,
+      type: OtpType.PASSWORD_RESET,
+    } as any);
+
+    await expect(
+      authService.verifyPasswordResetOtp(
+        'admin@softlogicwhiteboard.com',
+        '1234',
+      ),
+    ).resolves.toEqual({ message: 'OTP verified successfully' });
+
+    expect(mockedAuthRepository.findLatestOtp).toHaveBeenCalledWith(
+      'user-1',
+      OtpType.PASSWORD_RESET,
+    );
+    expect(mockedVerifyOtpHash).not.toHaveBeenCalled();
+    expect(mockedAuthRepository.incrementOtpAttempts).not.toHaveBeenCalled();
+  });
+
+  it('accepts 1234 while completing a password reset for an allowlisted tester', async () => {
+    mockedAuthRepository.findLatestOtp.mockResolvedValue({
+      ...activeOtp,
+      type: OtpType.PASSWORD_RESET,
+    } as any);
+
+    await expect(
+      authService.completePasswordResetOtp(
+        'admin@softlogicwhiteboard.com',
+        '1234',
+        'newpass1',
+      ),
+    ).resolves.toEqual({ message: 'Password changed successfully' });
+
+    expect(mockedVerifyOtpHash).not.toHaveBeenCalled();
+    expect(mockedAuthRepository.markOtpUsed).toHaveBeenCalledWith('otp-1');
+    expect(mockedAuthRepository.updateUser).toHaveBeenCalledWith(
+      'user-1',
+      expect.objectContaining({ isEmailVerified: true }),
+    );
+  });
+
+  it('rejects 1234 for password reset when the email is not allowlisted', async () => {
+    env.DEV_FIXED_OTP_ALLOWED_EMAILS = 'qa@softlogicwhiteboard.com';
+    mockedAuthRepository.findLatestOtp.mockResolvedValue({
+      ...activeOtp,
+      type: OtpType.PASSWORD_RESET,
+    } as any);
+
+    await expect(
+      authService.verifyPasswordResetOtp(
+        'admin@softlogicwhiteboard.com',
+        '1234',
+      ),
+    ).rejects.toThrow(AuthError.otpInvalid());
+
+    expect(mockedVerifyOtpHash).toHaveBeenCalledWith('1234', 'hashed-otp');
+    expect(mockedAuthRepository.incrementOtpAttempts).toHaveBeenCalledWith('otp-1');
+  });
+
+  it('still requires an active reset OTP record before accepting 1234', async () => {
+    mockedAuthRepository.findLatestOtp.mockResolvedValue(null);
+
+    await expect(
+      authService.verifyPasswordResetOtp(
+        'admin@softlogicwhiteboard.com',
+        '1234',
+      ),
+    ).rejects.toThrow(AuthError.otpInvalid());
+
+    expect(mockedVerifyOtpHash).not.toHaveBeenCalled();
     expect(mockedAuthRepository.markOtpUsed).not.toHaveBeenCalled();
   });
 
