@@ -7,6 +7,7 @@ import {
 } from "@/shared/utils/access-control";
 import { prisma } from "@/config";
 import { liveSessionService } from "@/modules/live-sessions/live-session.service";
+import { aiRealtimeRoomFor, registerAiRealtimeServer } from "@/modules/ai/ai.realtime";
 
 interface SocketUserContext extends AuthenticatedUserLike {
   email: string;
@@ -44,6 +45,7 @@ export const setupSockets = (httpServer: HttpServer): Server => {
       methods: ["GET", "POST"],
     },
   });
+  registerAiRealtimeServer(io);
 
   io.use((socket, next) => {
     try {
@@ -193,6 +195,27 @@ export const setupSockets = (httpServer: HttpServer): Server => {
       });
 
       socket.leave(`live-session:${liveSessionId}`);
+    });
+
+    socket.on("ai:join", async () => {
+      if (!user) {
+        socket.emit("socket-error", { message: "Authentication is required" });
+        return;
+      }
+      if (
+        !["SUPER_ADMIN", "PARTNER_ADMIN", "CUSTOMER_ADMIN", "ADMIN"].includes(
+          user.role,
+        )
+      ) {
+        socket.emit("socket-error", { message: "Admin access is required" });
+        return;
+      }
+      const room = await aiRealtimeRoomFor(user as AuthenticatedUserLike);
+      socket.join(room);
+      if (user.organizationId) {
+        socket.join(`ai:organization:${user.organizationId}`);
+      }
+      socket.emit("ai:joined", { room });
     });
 
     socket.on(

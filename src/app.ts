@@ -28,10 +28,10 @@ import { i18nRoutes } from './modules/i18n/i18n.routes';
 import { feedbackRoutes } from './modules/feedback/feedback.routes';
 import { organizationsRoutes } from './modules/organizations/organizations.routes';
 import { supportRoutes } from './modules/support/support.routes';
+import { aiRoutes } from './modules/ai/ai.routes';
 import {
   chatRoutes,
   assessmentsRoutes,
-  aiRoutes,
   simulationsRoutes,
   marketplaceRoutes,
 } from './modules/stubs';

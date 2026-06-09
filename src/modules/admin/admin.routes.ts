@@ -3,6 +3,7 @@ import { authMiddleware, roleGuard } from '@/shared/middleware/auth.middleware';
 import { uploadSingle } from '@/shared/middleware/upload.middleware';
 import { validate } from '@/shared/middleware/validation.middleware';
 import { adminController } from './admin.controller';
+import { adminAiRoutes } from '@/modules/ai/ai.routes';
 import {
   bulkCreateHardwareActivationKeysSchema,
   bulkInviteSchema,
@@ -42,6 +43,7 @@ router.use(authMiddleware);
 router.use(roleGuard('SUPER_ADMIN', 'PARTNER_ADMIN', 'CUSTOMER_ADMIN', 'ADMIN'));
 
 router.get('/dashboard', adminController.dashboard);
+router.use('/ai', adminAiRoutes);
 
 router.get('/organizations', validate(listOrganizationsQuerySchema, 'query'), adminController.listOrganizations);
 router.get('/organizations/export', validate(listOrganizationsQuerySchema.merge(exportQuerySchema), 'query'), adminController.exportOrganizations);

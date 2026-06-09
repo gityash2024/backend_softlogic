@@ -699,21 +699,30 @@ enum HardwareActivationStatus {
 model AiCreditAccount {
   id                      String                @id @default(uuid())
   scope                   AiCreditScope
+  parentAccountId         String?
   organizationId          String?
   userId                  String?
   hardwareActivationKeyId String?
   balanceMinor            Int                   @default(0)
   includedMinor           Int                   @default(70000)
   currency                String                @default("INR")
+  allocatedTokens         BigInt                @default(0)
+  usedTokens              BigInt                @default(0)
+  reservedTokens          BigInt                @default(0)
+  childAllocatedTokens    BigInt                @default(0)
+  unlimited               Boolean               @default(false)
   status                  AiCreditAccountStatus @default(ACTIVE)
   createdAt               DateTime              @default(now())
   updatedAt               DateTime              @updatedAt
 
+  parentAccount         AiCreditAccount?       @relation("AiCreditAccountHierarchy", fields: [parentAccountId], references: [id], onDelete: SetNull)
+  childAccounts         AiCreditAccount[]      @relation("AiCreditAccountHierarchy")
   organization          Organization?          @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   user                  User?                  @relation("AiCreditAccountsUser", fields: [userId], references: [id], onDelete: Cascade)
   hardwareActivationKey HardwareActivationKey? @relation(fields: [hardwareActivationKeyId], references: [id], onDelete: SetNull)
   ledgerEntries         AiCreditLedgerEntry[]
 
+  @@index([parentAccountId])
   @@index([organizationId])
   @@index([userId])
   @@index([scope])
@@ -721,6 +730,7 @@ model AiCreditAccount {
 }
 
 enum AiCreditScope {
+  MASTER
   ORGANIZATION
   USER
   HARDWARE
@@ -740,6 +750,9 @@ model AiCreditLedgerEntry {
   amountMinor     Int
   oldBalanceMinor Int
   newBalanceMinor Int
+  amountTokens    BigInt             @default(0)
+  oldTokenBalance BigInt?
+  newTokenBalance BigInt?
   reason          String?
   referenceNote   String?
   metadata        Json               @default("{}")
@@ -758,6 +771,30 @@ enum AiCreditLedgerType {
   USAGE
   MANUAL_EXTENSION
   ADJUSTMENT
+  MASTER_TOP_UP
+  ALLOCATION
+  RESERVATION
+  USAGE_COMMIT
+  RESERVATION_REFUND
+}
+
+model AiMasterConfig {
+  id                       String   @id @default("master")
+  provider                 String   @default("gemini")
+  geminiApiKeyEncrypted    String?
+  geminiApiKeyFingerprint  String?
+  geminiApiKeyLast4        String?
+  geminiTextModel          String   @default("gemini-3.5-flash")
+  geminiImageModel         String   @default("imagen-4.0-generate-001")
+  geminiTtsModel           String   @default("gemini-2.5-flash-preview-tts")
+  enabled                  Boolean  @default(false)
+  lastTestedAt             DateTime?
+  lastTestStatus           String?
+  lastTestMessage          String?
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
+
+  @@map("ai_master_configs")
 }
 
 model TermsAcceptance {

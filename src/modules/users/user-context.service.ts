@@ -205,7 +205,9 @@ const toOrganizationSummary = (organization: Organization): OrganizationSummary 
   defaultStorageProvider: organization.storageProvider ?? null,
   storageProvider: organization.storageProvider ?? null,
   storageStatus: organization.storageStatus,
-  aiSettings: toOrganizationAiSettings(organization.settings),
+  // Organization-level AI keys are intentionally no longer exposed. The
+  // whiteboard now uses the centralized backend AI module with one master key.
+  aiSettings: null,
 });
 
 const toSubscriptionSummary = (
