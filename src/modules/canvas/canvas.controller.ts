@@ -1,5 +1,5 @@
 import { Request, Response, NextFunction } from "express";
-import { Prisma, UserRole } from "@prisma/client";
+import { UserRole } from "@prisma/client";
 import { prisma } from "@/config";
 import { ApiResponse } from "@/shared/utils/api-response";
 import { AppError } from "@/shared/errors/AppError";
@@ -69,11 +69,6 @@ export class CanvasController {
       }
 
       const { name, description, metadata } = req.body;
-      const clientDraftId =
-        typeof req.body.clientDraftId === "string" &&
-        req.body.clientDraftId.trim().length > 0
-          ? req.body.clientDraftId.trim()
-          : null;
       const requestedOrganizationId =
         typeof req.body.organizationId === "string" &&
         req.body.organizationId.trim().length > 0
@@ -93,103 +88,29 @@ export class CanvasController {
         }
       }
 
-      if (clientDraftId) {
-        const existing = await prisma.canvas.findFirst({
-          where: {
-            userId: req.user!.userId,
-            clientDraftId,
-            deletedAt: null,
-          },
-          include: {
-            slides: true,
-            organization: { select: { id: true, name: true } },
-            user: { select: { id: true, name: true, email: true } },
-          },
-        });
-
-        if (existing) {
-          ApiResponse.success(
-            res,
-            {
-              ...existing,
-              access: await canvasAccessMetadata(existing, req.user!),
-            },
-            "Canvas already exists for draft",
-          );
-          return;
-        }
-      }
-
-      try {
-        const canvas = await prisma.canvas.create({
-          data: {
-            userId: req.user!.userId,
-            organizationId,
-            name: name || "Untitled Canvas",
-            description,
-            metadata: metadata ?? undefined,
-            clientDraftId: clientDraftId ?? undefined,
-            slides: { create: { order: 0, name: "Slide 1" } },
-          },
-          include: {
-            slides: true,
-            organization: { select: { id: true, name: true } },
-            user: { select: { id: true, name: true, email: true } },
-          },
-        });
-        ApiResponse.created(
-          res,
-          { ...canvas, access: await canvasAccessMetadata(canvas, req.user!) },
-          "Canvas created",
-        );
-      } catch (error) {
-        if (clientDraftId && this.isClientDraftUniqueConflict(error)) {
-          const existing = await prisma.canvas.findFirst({
-            where: {
-              userId: req.user!.userId,
-              clientDraftId,
-              deletedAt: null,
-            },
-            include: {
-              slides: true,
-              organization: { select: { id: true, name: true } },
-              user: { select: { id: true, name: true, email: true } },
-            },
-          });
-
-          if (existing) {
-            ApiResponse.success(
-              res,
-              {
-                ...existing,
-                access: await canvasAccessMetadata(existing, req.user!),
-              },
-              "Canvas already exists for draft",
-            );
-            return;
-          }
-        }
-
-        throw error;
-      }
+      const canvas = await prisma.canvas.create({
+        data: {
+          userId: req.user!.userId,
+          organizationId,
+          name: name || "Untitled Canvas",
+          description,
+          metadata: metadata ?? undefined,
+          slides: { create: { order: 0, name: "Slide 1" } },
+        },
+        include: {
+          slides: true,
+          organization: { select: { id: true, name: true } },
+          user: { select: { id: true, name: true, email: true } },
+        },
+      });
+      ApiResponse.created(
+        res,
+        { ...canvas, access: await canvasAccessMetadata(canvas, req.user!) },
+        "Canvas created",
+      );
     } catch (error) {
       next(error);
     }
-  }
-
-  private isClientDraftUniqueConflict(error: unknown): boolean {
-    if (
-      !(error instanceof Prisma.PrismaClientKnownRequestError) ||
-      error.code !== "P2002"
-    ) {
-      return false;
-    }
-    const target = error.meta?.target;
-    return (
-      Array.isArray(target) &&
-      target.includes("userId") &&
-      target.includes("clientDraftId")
-    );
   }
 
   async getById(

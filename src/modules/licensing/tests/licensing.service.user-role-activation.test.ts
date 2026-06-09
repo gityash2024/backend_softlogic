@@ -38,9 +38,12 @@ describe('LicensingService role activation checks', () => {
       id: 'org-1',
       status: OrganizationStatus.ACTIVE,
       deletedAt: null,
-      teacherOnlyMode: true,
-      studentLoginEnabled: false,
-      parentLoginEnabled: false,
+      teacherOnlyMode: false,
+      studentLoginEnabled: true,
+      parentLoginEnabled: true,
+      teacherUserLimit: null,
+      studentUserLimit: null,
+      parentUserLimit: null,
     });
     mockedPrisma.subscription.findMany.mockResolvedValue([
       {
@@ -52,7 +55,7 @@ describe('LicensingService role activation checks', () => {
     mockedPrisma.user.count.mockResolvedValue(2);
   });
 
-  it('allows active student creation even when student login is disabled', async () => {
+  it('allows active student creation when the organization enables students', async () => {
     await expect(
       licensingService.assertCanActivateUserRole({
         organizationId: 'org-1',
@@ -61,12 +64,67 @@ describe('LicensingService role activation checks', () => {
     ).resolves.toBeUndefined();
   });
 
-  it('allows active parent creation even when parent login is disabled', async () => {
+  it('blocks active student creation when student users are disabled', async () => {
+    mockedPrisma.organization.findUnique.mockResolvedValue({
+      id: 'org-1',
+      status: OrganizationStatus.ACTIVE,
+      deletedAt: null,
+      teacherOnlyMode: false,
+      studentLoginEnabled: false,
+      parentLoginEnabled: false,
+      teacherUserLimit: null,
+      studentUserLimit: null,
+      parentUserLimit: null,
+    });
+
+    await expect(
+      licensingService.assertCanActivateUserRole({
+        organizationId: 'org-1',
+        role: UserRole.STUDENT,
+      }),
+    ).rejects.toThrow('Student users are not enabled for this organization');
+  });
+
+  it('blocks student and parent creation in teacher-only organizations', async () => {
+    mockedPrisma.organization.findUnique.mockResolvedValue({
+      id: 'org-1',
+      status: OrganizationStatus.ACTIVE,
+      deletedAt: null,
+      teacherOnlyMode: true,
+      studentLoginEnabled: false,
+      parentLoginEnabled: false,
+      teacherUserLimit: 10,
+      studentUserLimit: 0,
+      parentUserLimit: 0,
+    });
+
     await expect(
       licensingService.assertCanActivateUserRole({
         organizationId: 'org-1',
         role: UserRole.PARENT,
       }),
-    ).resolves.toBeUndefined();
+    ).rejects.toThrow('This organization allows teacher users only');
+  });
+
+  it('blocks creation when the role-specific organization cap is full', async () => {
+    mockedPrisma.organization.findUnique.mockResolvedValue({
+      id: 'org-1',
+      status: OrganizationStatus.ACTIVE,
+      deletedAt: null,
+      teacherOnlyMode: false,
+      studentLoginEnabled: true,
+      parentLoginEnabled: true,
+      teacherUserLimit: 2,
+      studentUserLimit: 10,
+      parentUserLimit: 10,
+    });
+    mockedPrisma.user.count.mockResolvedValueOnce(2);
+
+    await expect(
+      licensingService.assertCanActivateUserRole({
+        organizationId: 'org-1',
+        role: UserRole.TEACHER,
+      }),
+    ).rejects.toThrow('TEACHER user limit reached for this organization');
   });
 });

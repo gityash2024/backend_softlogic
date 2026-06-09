@@ -1,4 +1,6 @@
 import {
+  bulkCreateHardwareActivationKeysSchema,
+  createHardwareActivationKeySchema,
   exportQuerySchema,
   listContentExportsQuerySchema,
   listUsersQuerySchema,
@@ -25,6 +27,24 @@ describe('admin organization validator', () => {
     const result = updateOrganizationSchema.safeParse({});
 
     expect(result.success).toBe(false);
+  });
+
+  it('accepts organization role cap updates', () => {
+    const result = updateOrganizationSchema.safeParse({
+      parentLoginEnabled: true,
+      teacherUserLimit: '3',
+      studentUserLimit: 25,
+      parentUserLimit: 25,
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data).toMatchObject({
+        teacherUserLimit: 3,
+        studentUserLimit: 25,
+        parentUserLimit: 25,
+      });
+    }
   });
 
   it('parses user list filters from query strings', () => {
@@ -66,5 +86,22 @@ describe('admin organization validator', () => {
     expect(listResult.format).toBe('PDF');
     expect(listResult.sortOrder).toBe('asc');
     expect(exportResult.format).toBe('csv');
+  });
+
+  it('locks hardware activation key device count to one', () => {
+    expect(
+      createHardwareActivationKeySchema.safeParse({
+        organizationId: '00000000-0000-0000-0000-000000000001',
+        label: 'Lab board',
+        maxDevices: 2,
+      }).success,
+    ).toBe(false);
+
+    expect(
+      bulkCreateHardwareActivationKeysSchema.safeParse({
+        organizationId: '00000000-0000-0000-0000-000000000001',
+        keys: [{ label: 'Lab board 1', maxDevices: 2 }],
+      }).success,
+    ).toBe(false);
   });
 });

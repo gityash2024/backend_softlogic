@@ -26,6 +26,8 @@ const optionalDate = z.preprocess((value) => {
   return value;
 }, z.coerce.date().optional());
 
+const optionalUserLimit = z.coerce.number().int().min(0).optional().nullable();
+
 // White-label brand colors accept #rgb or #rrggbb hex.
 const HEX_COLOR_RE = /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/;
 
@@ -52,6 +54,9 @@ export const createOrganizationSchema = z.object({
   parentLoginEnabled: z.boolean().optional(),
   sessionOnlyJoinEnabled: z.boolean().optional(),
   teacherOnlyMode: z.boolean().optional(),
+  teacherUserLimit: optionalUserLimit,
+  studentUserLimit: optionalUserLimit,
+  parentUserLimit: optionalUserLimit,
   supportEmail: z.string().email().optional().nullable(),
   supportPhone: z.string().min(3).max(40).optional().nullable(),
   storageProviders: z.array(z.nativeEnum(OrganizationStorageProvider)).optional(),
@@ -73,6 +78,9 @@ export const updateOrganizationSchema = z.object({
   parentLoginEnabled: z.boolean().optional(),
   sessionOnlyJoinEnabled: z.boolean().optional(),
   teacherOnlyMode: z.boolean().optional(),
+  teacherUserLimit: optionalUserLimit,
+  studentUserLimit: optionalUserLimit,
+  parentUserLimit: optionalUserLimit,
   supportEmail: z.string().email().optional().nullable(),
   supportPhone: z.string().min(3).max(40).optional().nullable(),
   storageProviders: z.array(z.nativeEnum(OrganizationStorageProvider)).optional(),
@@ -291,7 +299,7 @@ export const createHardwareActivationKeySchema = z.object({
   label: z.string().trim().min(1).max(120),
   expiresAt: z.coerce.date().optional().nullable(),
   // #28 Optional device limit per key (>= 1, defaults to 1 = single-device behavior).
-  maxDevices: z.coerce.number().int().min(1).default(1),
+  maxDevices: z.coerce.number().int().min(1).max(1).default(1),
 });
 
 export const emailActivationKeysToOrgAdminSchema = z.object({
@@ -299,7 +307,7 @@ export const emailActivationKeysToOrgAdminSchema = z.object({
 });
 
 // Bulk-create hardware activation keys (1..100 rows). Each row mirrors the single-create body:
-// label is required (trimmed, 1..120), maxDevices optional (>= 1), assignedUserId/expiresAt optional.
+// label is required (trimmed, 1..120), maxDevices optional but locked to 1.
 export const bulkCreateHardwareActivationKeysSchema = z.object({
   organizationId: z.string().uuid(),
   subscriptionId: z.string().uuid().optional().nullable(),
@@ -307,7 +315,7 @@ export const bulkCreateHardwareActivationKeysSchema = z.object({
     .array(
       z.object({
         label: z.string().trim().min(1).max(120),
-        maxDevices: z.coerce.number().int().min(1).optional(),
+        maxDevices: z.coerce.number().int().min(1).max(1).optional(),
         assignedUserId: z.string().uuid().optional().nullable(),
         expiresAt: z.coerce.date().optional().nullable(),
       }),

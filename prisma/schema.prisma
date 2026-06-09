@@ -101,6 +101,9 @@ model Organization {
   parentLoginEnabled     Boolean                       @default(false)
   sessionOnlyJoinEnabled Boolean                       @default(true)
   teacherOnlyMode        Boolean                       @default(false)
+  teacherUserLimit       Int?
+  studentUserLimit       Int?
+  parentUserLimit        Int?
   supportEmail           String?
   supportPhone           String?
   primaryAdminUserId     String?
@@ -311,7 +314,6 @@ model Canvas {
   description    String?
   metadata       Json?
   thumbnail      String?
-  clientDraftId  String?
   isPublic       Boolean   @default(false)
   shareToken     String?   @unique
   createdAt      DateTime  @default(now())
@@ -324,7 +326,6 @@ model Canvas {
   exports      Export[]
   liveSessions LiveSession[]
 
-  @@unique([userId, clientDraftId])
   @@index([organizationId])
   @@map("canvases")
 }

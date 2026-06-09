@@ -66,6 +66,9 @@ interface CreateOrganizationInput {
   parentLoginEnabled?: boolean;
   sessionOnlyJoinEnabled?: boolean;
   teacherOnlyMode?: boolean;
+  teacherUserLimit?: number | null;
+  studentUserLimit?: number | null;
+  parentUserLimit?: number | null;
   supportEmail?: string | null;
   supportPhone?: string | null;
   storageProviders?: OrganizationStorageProvider[];
@@ -87,6 +90,9 @@ interface UpdateOrganizationInput {
   parentLoginEnabled?: boolean;
   sessionOnlyJoinEnabled?: boolean;
   teacherOnlyMode?: boolean;
+  teacherUserLimit?: number | null;
+  studentUserLimit?: number | null;
+  parentUserLimit?: number | null;
   supportEmail?: string | null;
   supportPhone?: string | null;
   storageProviders?: OrganizationStorageProvider[];
@@ -134,6 +140,17 @@ interface DeleteUserResult {
   affectedOrganizationIds: string[];
   licenseSnapshots: Record<string, unknown>;
 }
+
+type OrganizationRolePolicy = {
+  studentLoginEnabled: boolean;
+  parentLoginEnabled: boolean;
+  teacherOnlyMode: boolean;
+  teacherUserLimit: number | null;
+  studentUserLimit: number | null;
+  parentUserLimit: number | null;
+};
+
+type OrganizationRolePolicyInput = Partial<OrganizationRolePolicy>;
 
 interface DeleteOrganizationResult {
   id: string;
@@ -265,6 +282,54 @@ const ADMIN_ONBOARDING_ROLES = [
 const normalizeEmail = (value?: string | null): string | null => {
   const normalized = value?.trim().toLowerCase();
   return normalized ? normalized : null;
+};
+
+const normalizeUserLimit = (value: number | null | undefined): number | null => {
+  if (value === undefined || value === null) return null;
+  return Math.max(0, Math.trunc(value));
+};
+
+const resolveOrganizationRolePolicy = (
+  input: OrganizationRolePolicyInput,
+  existing?: OrganizationRolePolicy,
+): OrganizationRolePolicy => {
+  const teacherOnlyMode = input.teacherOnlyMode ?? existing?.teacherOnlyMode ?? false;
+  let parentLoginEnabled = input.parentLoginEnabled ?? existing?.parentLoginEnabled ?? false;
+  let studentLoginEnabled = input.studentLoginEnabled ?? existing?.studentLoginEnabled ?? false;
+
+  if (teacherOnlyMode) {
+    parentLoginEnabled = false;
+    studentLoginEnabled = false;
+  } else if (parentLoginEnabled) {
+    studentLoginEnabled = true;
+  }
+
+  return {
+    teacherOnlyMode,
+    parentLoginEnabled,
+    studentLoginEnabled,
+    teacherUserLimit: normalizeUserLimit(
+      input.teacherUserLimit !== undefined
+        ? input.teacherUserLimit
+        : existing?.teacherUserLimit,
+    ),
+    studentUserLimit: teacherOnlyMode
+      ? 0
+      : normalizeUserLimit(
+          input.studentUserLimit !== undefined
+            ? input.studentUserLimit
+            : existing?.studentUserLimit,
+        ),
+    parentUserLimit: teacherOnlyMode
+      ? 0
+      : parentLoginEnabled
+        ? normalizeUserLimit(
+            input.parentUserLimit !== undefined
+              ? input.parentUserLimit
+              : existing?.parentUserLimit,
+          )
+        : 0,
+  };
 };
 
 const primaryAdminRoleForOrganization = (
@@ -455,6 +520,38 @@ export class AdminService {
       },
     },
   } satisfies Prisma.OrganizationInclude;
+
+  private async assertOrganizationRoleLimitsCanApply(
+    organizationId: string,
+    policy: OrganizationRolePolicy,
+  ): Promise<void> {
+    const counts = await prisma.user.groupBy({
+      by: ['role'],
+      where: {
+        primaryOrganizationId: organizationId,
+        status: UserStatus.ACTIVE,
+        deletedAt: null,
+        role: { in: [UserRole.TEACHER, UserRole.STUDENT, UserRole.PARENT] },
+      },
+      _count: { _all: true },
+    });
+    const byRole = new Map(counts.map((row) => [row.role, row._count._all]));
+    const checks: Array<{ role: UserRole; limit: number | null }> = [
+      { role: UserRole.TEACHER, limit: policy.teacherUserLimit },
+      { role: UserRole.STUDENT, limit: policy.studentUserLimit },
+      { role: UserRole.PARENT, limit: policy.parentUserLimit },
+    ];
+
+    for (const check of checks) {
+      const used = byRole.get(check.role) ?? 0;
+      if (check.limit !== null && check.limit < used) {
+        throw new AppError(
+          `${ROLE_LABEL[check.role]} limit cannot be lower than current active users (${used})`,
+          409,
+        );
+      }
+    }
+  }
 
   async getDashboardOverview(actor: AuthenticatedUserLike) {
     const managedOrganizationIds = await getManagedOrganizationIds(actor);
@@ -830,6 +927,18 @@ export class AdminService {
       await this.ensureSupportEmailAvailable(supportEmail);
     }
     const storage = this.resolveStorageSelection(input);
+    const rolePolicy = resolveOrganizationRolePolicy(
+      actor.role === UserRole.SUPER_ADMIN
+        ? {
+            studentLoginEnabled: input.studentLoginEnabled ?? false,
+            parentLoginEnabled: input.parentLoginEnabled ?? false,
+            teacherOnlyMode: input.teacherOnlyMode ?? false,
+            teacherUserLimit: input.teacherUserLimit ?? null,
+            studentUserLimit: input.studentUserLimit ?? null,
+            parentUserLimit: input.parentUserLimit ?? null,
+          }
+        : {},
+    );
 
     const setupEmails: PasswordSetupEmailPayload[] = [];
 
@@ -851,12 +960,19 @@ export class AdminService {
           brandAccentColor:
             actor.role === UserRole.SUPER_ADMIN ? input.brandAccentColor ?? null : null,
           studentLoginEnabled:
-            actor.role === UserRole.SUPER_ADMIN ? input.studentLoginEnabled ?? false : false,
+            actor.role === UserRole.SUPER_ADMIN ? rolePolicy.studentLoginEnabled : false,
           parentLoginEnabled:
-            actor.role === UserRole.SUPER_ADMIN ? input.parentLoginEnabled ?? false : false,
+            actor.role === UserRole.SUPER_ADMIN ? rolePolicy.parentLoginEnabled : false,
           sessionOnlyJoinEnabled:
             actor.role === UserRole.SUPER_ADMIN ? input.sessionOnlyJoinEnabled ?? true : true,
-          teacherOnlyMode: input.teacherOnlyMode ?? false,
+          teacherOnlyMode:
+            actor.role === UserRole.SUPER_ADMIN ? rolePolicy.teacherOnlyMode : false,
+          teacherUserLimit:
+            actor.role === UserRole.SUPER_ADMIN ? rolePolicy.teacherUserLimit : null,
+          studentUserLimit:
+            actor.role === UserRole.SUPER_ADMIN ? rolePolicy.studentUserLimit : null,
+          parentUserLimit:
+            actor.role === UserRole.SUPER_ADMIN ? rolePolicy.parentUserLimit : null,
           supportEmail,
           supportPhone: input.supportPhone,
           storageProviders: storage.providers,
@@ -969,6 +1085,12 @@ export class AdminService {
         primaryAdminUserId: true,
         storageProvider: true,
         storageProviders: true,
+        studentLoginEnabled: true,
+        parentLoginEnabled: true,
+        teacherOnlyMode: true,
+        teacherUserLimit: true,
+        studentUserLimit: true,
+        parentUserLimit: true,
       },
     });
     if (!existing || existing.deletedAt) {
@@ -984,6 +1106,9 @@ export class AdminService {
       'parentLoginEnabled',
       'sessionOnlyJoinEnabled',
       'teacherOnlyMode',
+      'teacherUserLimit',
+      'studentUserLimit',
+      'parentUserLimit',
     ];
     if (
       actor.role !== UserRole.SUPER_ADMIN &&
@@ -1025,6 +1150,17 @@ export class AdminService {
             storageStatus: input.storageStatus,
           })
         : null;
+    const rolePolicy = resolveOrganizationRolePolicy(input, {
+      studentLoginEnabled: existing.studentLoginEnabled,
+      parentLoginEnabled: existing.parentLoginEnabled,
+      teacherOnlyMode: existing.teacherOnlyMode,
+      teacherUserLimit: existing.teacherUserLimit,
+      studentUserLimit: existing.studentUserLimit,
+      parentUserLimit: existing.parentUserLimit,
+    });
+    if (commercialKeys.some((key) => input[key] !== undefined)) {
+      await this.assertOrganizationRoleLimitsCanApply(organizationId, rolePolicy);
+    }
 
     const data: Prisma.OrganizationUpdateInput = {
       name: input.name,
@@ -1034,10 +1170,33 @@ export class AdminService {
       brandName: input.brandName,
       brandPrimaryColor: input.brandPrimaryColor,
       brandAccentColor: input.brandAccentColor,
-      studentLoginEnabled: input.studentLoginEnabled,
-      parentLoginEnabled: input.parentLoginEnabled,
+      studentLoginEnabled:
+        input.studentLoginEnabled !== undefined ||
+        input.parentLoginEnabled !== undefined ||
+        input.teacherOnlyMode !== undefined
+          ? rolePolicy.studentLoginEnabled
+          : undefined,
+      parentLoginEnabled:
+        input.parentLoginEnabled !== undefined ||
+        input.teacherOnlyMode !== undefined
+          ? rolePolicy.parentLoginEnabled
+          : undefined,
       sessionOnlyJoinEnabled: input.sessionOnlyJoinEnabled,
-      teacherOnlyMode: input.teacherOnlyMode,
+      teacherOnlyMode:
+        input.teacherOnlyMode !== undefined ? rolePolicy.teacherOnlyMode : undefined,
+      teacherUserLimit:
+        input.teacherUserLimit !== undefined ? rolePolicy.teacherUserLimit : undefined,
+      studentUserLimit:
+        input.studentUserLimit !== undefined ||
+        input.teacherOnlyMode !== undefined
+          ? rolePolicy.studentUserLimit
+          : undefined,
+      parentUserLimit:
+        input.parentUserLimit !== undefined ||
+        input.parentLoginEnabled !== undefined ||
+        input.teacherOnlyMode !== undefined
+          ? rolePolicy.parentUserLimit
+          : undefined,
       supportEmail: nextSupportEmail,
       supportPhone: input.supportPhone,
       storageProviders: storage?.providers,

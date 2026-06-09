@@ -377,12 +377,46 @@ export class LicensingService {
     ) {
       throw new AppError('Active organization is required for licensed users', 400);
     }
+    if (
+      organization.teacherOnlyMode &&
+      (input.role === UserRole.STUDENT || input.role === UserRole.PARENT)
+    ) {
+      throw new AppError('This organization allows teacher users only', 403);
+    }
+    if (input.role === UserRole.STUDENT && !organization.studentLoginEnabled) {
+      throw new AppError('Student users are not enabled for this organization', 403);
+    }
+    if (input.role === UserRole.PARENT && !organization.parentLoginEnabled) {
+      throw new AppError('Parent users are not enabled for this organization', 403);
+    }
+
     const subscription = await this.getActiveOrganizationSubscription(input.organizationId);
     if (!subscription) {
       throw new AppError('An active subscription is required before creating licensed users', 403);
     }
     if (!isActiveSubscriptionStatus(subscription.status)) {
       throw new AppError('Subscription is not active', 403);
+    }
+
+    const roleLimit =
+      input.role === UserRole.TEACHER
+        ? organization.teacherUserLimit
+        : input.role === UserRole.STUDENT
+          ? organization.studentUserLimit
+          : organization.parentUserLimit;
+    if (roleLimit !== null) {
+      const usedForRole = await prisma.user.count({
+        where: {
+          primaryOrganizationId: input.organizationId,
+          status: UserStatus.ACTIVE,
+          deletedAt: null,
+          role: input.role,
+          ...(input.userIdToIgnore ? { id: { not: input.userIdToIgnore } } : {}),
+        },
+      });
+      if (usedForRole >= roleLimit) {
+        throw new AppError(`${input.role} user limit reached for this organization`, 409);
+      }
     }
 
     const used = await prisma.user.count({
@@ -485,7 +519,7 @@ export class LicensingService {
     await this.requireSuperAdmin(actor);
     await ensureOrganizationManaged(input.organizationId, actor);
     const { subscription, expiresAt } = await this.resolveKeySubscription(input);
-    const maxDevices = Math.max(1, Math.trunc(input.maxDevices ?? 1));
+    const maxDevices = 1;
     await this.assertHardwareKeyCapacity(subscription.id, 1);
 
     const rawKey = `SL-${randomBytes(12).toString('hex').toUpperCase()}`;
@@ -508,7 +542,7 @@ export class LicensingService {
 
   /**
    * Bulk-creates hardware activation keys for an organization. Loops the single-key
-   * createHardwareActivationKey (same scope checks, expiry defaulting, maxDevices clamp and
+   * createHardwareActivationKey (same scope checks, expiry defaulting, single-device limit and
    * plaintext key surfacing) so behavior matches single-create exactly. Audited once with the count.
    */
   async bulkCreateHardwareActivationKeys(
@@ -949,7 +983,7 @@ export class LicensingService {
       assignedUserId: existing.assignedUserId,
       label: existing.label ? `${existing.label} replacement` : 'Replacement key',
       expiresAt: existing.expiresAt,
-      maxDevices: existing.maxDevices,
+        maxDevices: 1,
     });
     await this.audit(
       actor,

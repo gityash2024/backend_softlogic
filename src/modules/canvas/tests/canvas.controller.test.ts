@@ -6,16 +6,24 @@ import { canvasController } from "@/modules/canvas/canvas.controller";
 jest.mock("@/config", () => ({
   prisma: {
     canvas: {
+      count: jest.fn(),
       create: jest.fn(),
-      findFirst: jest.fn(),
+      findMany: jest.fn(),
+    },
+    organizationMembership: {
+      findMany: jest.fn(),
     },
   },
 }));
 
 const mockedPrisma = prisma as unknown as {
   canvas: {
+    count: jest.Mock;
     create: jest.Mock;
-    findFirst: jest.Mock;
+    findMany: jest.Mock;
+  };
+  organizationMembership: {
+    findMany: jest.Mock;
   };
 };
 
@@ -33,7 +41,6 @@ const canvasRecord = (id: string, userId = "teacher-1") => ({
   description: null,
   metadata: null,
   thumbnail: null,
-  clientDraftId: "draft-1",
   isPublic: false,
   shareToken: null,
   createdAt: new Date("2026-06-07T08:00:00.000Z"),
@@ -54,69 +61,53 @@ const response = () => {
   return res;
 };
 
-describe("CanvasController create idempotency", () => {
+describe("CanvasController database compatibility", () => {
   beforeEach(() => {
     jest.clearAllMocks();
   });
 
-  it("returns the existing active canvas for the same user and clientDraftId", async () => {
-    const existing = canvasRecord("canvas-existing");
-    mockedPrisma.canvas.findFirst.mockResolvedValue(existing);
+  it("lists canvases without requiring the removed clientDraftId column", async () => {
+    mockedPrisma.canvas.findMany.mockResolvedValue([canvasRecord("canvas-1")]);
+    mockedPrisma.canvas.count.mockResolvedValue(1);
     const res = response();
     const next = jest.fn();
 
-    await canvasController.create(
+    await canvasController.list(
       {
         user: teacherUser("teacher-1"),
-        body: { name: "Untitled Whiteboard", clientDraftId: " draft-1 " },
+        query: { page: "1", perPage: "100" },
       } as any,
       res as any,
       next,
     );
 
     expect(next).not.toHaveBeenCalled();
-    expect(mockedPrisma.canvas.findFirst).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: {
-          userId: "teacher-1",
-          clientDraftId: "draft-1",
-          deletedAt: null,
-        },
+    expect(mockedPrisma.canvas.findMany).toHaveBeenCalledWith(
+      expect.not.objectContaining({
+        where: expect.objectContaining({ clientDraftId: expect.anything() }),
       }),
     );
-    expect(mockedPrisma.canvas.create).not.toHaveBeenCalled();
     expect(res.status).toHaveBeenCalledWith(200);
-    expect(res.json).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({ id: "canvas-existing" }),
-        message: "Canvas already exists for draft",
-      }),
-    );
   });
 
-  it("keeps normal create behavior when clientDraftId is absent", async () => {
-    const created = canvasRecord("canvas-created");
-    mockedPrisma.canvas.create.mockResolvedValue(created);
+  it("ignores clientDraftId on create so the current database remains supported", async () => {
+    mockedPrisma.canvas.create.mockResolvedValue(canvasRecord("canvas-created"));
     const res = response();
     const next = jest.fn();
 
     await canvasController.create(
       {
         user: teacherUser("teacher-1"),
-        body: { name: "Untitled Whiteboard" },
+        body: { name: "Draft", clientDraftId: "draft-1" },
       } as any,
       res as any,
       next,
     );
 
     expect(next).not.toHaveBeenCalled();
-    expect(mockedPrisma.canvas.findFirst).not.toHaveBeenCalled();
     expect(mockedPrisma.canvas.create).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: expect.objectContaining({
-          userId: "teacher-1",
-          clientDraftId: undefined,
-        }),
+        data: expect.not.objectContaining({ clientDraftId: expect.anything() }),
       }),
     );
     expect(res.status).toHaveBeenCalledWith(201);
@@ -124,53 +115,6 @@ describe("CanvasController create idempotency", () => {
       expect.objectContaining({
         data: expect.objectContaining({ id: "canvas-created" }),
         message: "Canvas created",
-      }),
-    );
-  });
-
-  it("allows different users to create with the same clientDraftId", async () => {
-    mockedPrisma.canvas.findFirst.mockResolvedValue(null);
-    mockedPrisma.canvas.create
-      .mockResolvedValueOnce(canvasRecord("canvas-user-1", "teacher-1"))
-      .mockResolvedValueOnce(canvasRecord("canvas-user-2", "teacher-2"));
-
-    const firstRes = response();
-    const secondRes = response();
-
-    await canvasController.create(
-      {
-        user: teacherUser("teacher-1"),
-        body: { name: "Draft", clientDraftId: "draft-1" },
-      } as any,
-      firstRes as any,
-      jest.fn(),
-    );
-    await canvasController.create(
-      {
-        user: teacherUser("teacher-2"),
-        body: { name: "Draft", clientDraftId: "draft-1" },
-      } as any,
-      secondRes as any,
-      jest.fn(),
-    );
-
-    expect(mockedPrisma.canvas.create).toHaveBeenCalledTimes(2);
-    expect(mockedPrisma.canvas.create).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        data: expect.objectContaining({
-          userId: "teacher-1",
-          clientDraftId: "draft-1",
-        }),
-      }),
-    );
-    expect(mockedPrisma.canvas.create).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        data: expect.objectContaining({
-          userId: "teacher-2",
-          clientDraftId: "draft-1",
-        }),
       }),
     );
   });
