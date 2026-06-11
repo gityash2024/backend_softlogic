@@ -65,6 +65,7 @@ model User {
   hardwareResetsApproved      HardwareActivation[]            @relation("HardwareActivationsResetApprovedBy")
   aiCreditAccounts            AiCreditAccount[]               @relation("AiCreditAccountsUser")
   aiCreditLedgerEntries       AiCreditLedgerEntry[]           @relation("AiCreditLedgerActor")
+  aiFeatureUsageAttempts      AiFeatureUsageAttempt[]         @relation("AiFeatureUsageAttemptsUser")
   termsAcceptances            TermsAcceptance[]               @relation("TermsAcceptancesUser")
   primaryAdminOrganizations   Organization[]                  @relation("OrganizationPrimaryAdmin")
   supportThreadsOpened        SupportThread[]                 @relation("SupportThreadsOpened")
@@ -753,6 +754,15 @@ model AiCreditLedgerEntry {
   amountTokens    BigInt             @default(0)
   oldTokenBalance BigInt?
   newTokenBalance BigInt?
+  inputTokens     BigInt             @default(0)
+  outputTokens    BigInt             @default(0)
+  thinkingTokens  BigInt             @default(0)
+  totalTokens     BigInt             @default(0)
+  imageCount      Int                @default(0)
+  searchGroundingCount Int           @default(0)
+  estimatedCostMicros BigInt         @default(0)
+  modelId         String?
+  pricingSnapshot Json               @default("{}")
   reason          String?
   referenceNote   String?
   metadata        Json               @default("{}")
@@ -763,6 +773,7 @@ model AiCreditLedgerEntry {
 
   @@index([accountId])
   @@index([actorUserId])
+  @@index([modelId])
   @@map("ai_credit_ledger_entries")
 }
 
@@ -787,6 +798,7 @@ model AiMasterConfig {
   geminiTextModel          String   @default("gemini-3.5-flash")
   geminiImageModel         String   @default("imagen-4.0-generate-001")
   geminiTtsModel           String   @default("gemini-2.5-flash-preview-tts")
+  googleSearchGroundingEnabled Boolean @default(false)
   enabled                  Boolean  @default(false)
   lastTestedAt             DateTime?
   lastTestStatus           String?
@@ -795,6 +807,104 @@ model AiMasterConfig {
   updatedAt                DateTime @updatedAt
 
   @@map("ai_master_configs")
+}
+
+model AiModelPricing {
+  id                         String   @id @default(uuid())
+  provider                   String   @default("gemini")
+  modelId                    String   @unique
+  billingType                String   @default("token")
+  inputUsdMicrosPerMillion   Int      @default(0)
+  outputUsdMicrosPerMillion  Int      @default(0)
+  imageUsdMicrosEach         Int      @default(0)
+  searchUsdMicrosPerThousand Int      @default(0)
+  enabled                    Boolean  @default(true)
+  createdAt                  DateTime @default(now())
+  updatedAt                  DateTime @updatedAt
+
+  @@index([provider])
+  @@index([billingType])
+  @@map("ai_model_pricing")
+}
+
+model AiGoogleBillingConfig {
+  id                    String   @id @default("default")
+  enabled               Boolean  @default(false)
+  projectId             String   @default("softlogic-496310")
+  billingTableProjectId String?
+  billingDatasetId      String?
+  billingTableName      String?
+  monthlyCapMicros      BigInt   @default(50000000)
+  currency              String   @default("USD")
+  lastSyncAt            DateTime?
+  lastSyncStatus        String?
+  lastSyncMessage       String?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  @@map("ai_google_billing_configs")
+}
+
+model AiGoogleBillingSyncRun {
+  id                   String    @id @default(uuid())
+  status               String
+  month                String
+  projectId            String
+  billingTable         String?
+  googleSpendMicros    BigInt    @default(0)
+  softlogicSpendMicros BigInt    @default(0)
+  varianceMicros       BigInt    @default(0)
+  errorMessage         String?
+  startedAt            DateTime  @default(now())
+  completedAt          DateTime?
+
+  @@index([month])
+  @@index([status])
+  @@map("ai_google_billing_sync_runs")
+}
+
+model AiGoogleBillingDailyCost {
+  id                 String   @id @default(uuid())
+  usageDate          DateTime
+  month              String
+  projectId          String
+  serviceDescription String
+  skuDescription     String
+  costMicros         BigInt   @default(0)
+  creditsMicros      BigInt   @default(0)
+  netCostMicros      BigInt   @default(0)
+  currency           String   @default("USD")
+  usageAmount        Float?
+  usageUnit          String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@unique([usageDate, projectId, serviceDescription, skuDescription])
+  @@index([month])
+  @@index([projectId])
+  @@map("ai_google_billing_daily_costs")
+}
+
+model AiFeatureUsageAttempt {
+  id          String                    @id @default(uuid())
+  userId      String
+  featureKey  String
+  status      AiFeatureUsageAttemptStatus @default(RESERVED)
+  metadata    Json                      @default("{}")
+  createdAt   DateTime                  @default(now())
+  updatedAt   DateTime                  @updatedAt
+
+  user User @relation("AiFeatureUsageAttemptsUser", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, featureKey, status, createdAt])
+  @@index([featureKey, createdAt])
+  @@map("ai_feature_usage_attempts")
+}
+
+enum AiFeatureUsageAttemptStatus {
+  RESERVED
+  COMMITTED
+  FAILED
 }
 
 model TermsAcceptance {

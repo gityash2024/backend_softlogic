@@ -1874,22 +1874,20 @@ export class AdminService {
         );
       }
 
-      if (isAdminOnboardingRole(input.role)) {
-        const setupToken = await this.createPasswordSetupToken(tx, createdUser.id);
-        const organization = organizationId
-          ? await tx.organization.findUnique({
-              where: { id: organizationId },
-              select: { name: true },
-            })
-          : null;
-        setupEmails.push({
-          to: createdUser.email,
-          name: createdUser.name,
-          role: createdUser.role,
-          organizationName: organization?.name,
-          setupUrl: this.passwordSetupUrl(setupToken),
-        });
-      }
+      const setupToken = await this.createPasswordSetupToken(tx, createdUser.id);
+      const organization = organizationId
+        ? await tx.organization.findUnique({
+            where: { id: organizationId },
+            select: { name: true },
+          })
+        : null;
+      setupEmails.push({
+        to: createdUser.email,
+        name: createdUser.name,
+        role: createdUser.role,
+        organizationName: organization?.name,
+        setupUrl: this.passwordSetupUrl(setupToken),
+      });
 
       return createdUser;
     });
@@ -1918,12 +1916,6 @@ export class AdminService {
           `Password setup email failed for ${setupEmail.to}`,
         );
       }
-    } else {
-      await sendWelcomeEmail({
-        to: user.email,
-        name: user.name,
-        role: user.role,
-      });
     }
     return findUserContextById(user.id);
   }

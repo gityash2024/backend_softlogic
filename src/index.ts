@@ -1,6 +1,7 @@
 import http from 'http';
 import { createApp } from './app';
 import { env, connectDatabase } from './config';
+import { startAiGoogleBillingScheduler } from './modules/ai/ai.google-billing';
 import { setupSockets } from './sockets';
 import { logger } from './shared/middleware/logger.middleware';
 
@@ -18,6 +19,8 @@ const start = async (): Promise<void> => {
     // Setup WebSockets
     setupSockets(server);
 
+    const stopGoogleBillingScheduler = startAiGoogleBillingScheduler();
+
     // Start server
     server.listen(env.PORT, () => {
       logger.info(`🚀 Server running on port ${env.PORT}`);
@@ -30,6 +33,7 @@ const start = async (): Promise<void> => {
     const gracefulShutdown = async (signal: string): Promise<void> => {
       logger.info(`\n${signal} received. Shutting down gracefully...`);
       server.close(async () => {
+        stopGoogleBillingScheduler();
         logger.info('HTTP server closed');
         process.exit(0);
       });

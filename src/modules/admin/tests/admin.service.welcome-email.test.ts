@@ -55,6 +55,9 @@ describe('AdminService welcome email', () => {
           updateMany: jest.fn(),
           create: jest.fn().mockResolvedValue({ id: 'otp-1' }),
         },
+        organization: {
+          findUnique: jest.fn(),
+        },
         user: {
           create: mockedPrisma.user.create,
         },
@@ -70,22 +73,31 @@ describe('AdminService welcome email', () => {
     } as never);
   });
 
-  it('sends one password setup email after an admin-created student is persisted', async () => {
+  it.each([
+    UserRole.SUPER_ADMIN,
+    UserRole.ADMIN,
+    UserRole.PARTNER_ADMIN,
+    UserRole.CUSTOMER_ADMIN,
+    UserRole.TEACHER,
+    UserRole.STUDENT,
+    UserRole.PARENT,
+  ])('sends one password setup email after an admin-created %s is persisted', async (role) => {
+    const email = `${role.toLowerCase()}@example.com`;
     mockedPrisma.user.findFirst.mockResolvedValue(null);
     mockedPrisma.user.create.mockResolvedValue({
-      id: 'student-1',
-      email: 'student@example.com',
-      name: 'Student Demo',
-      role: UserRole.STUDENT,
+      id: `${role.toLowerCase()}-1`,
+      email,
+      name: `${role} Demo`,
+      role,
       status: UserStatus.DISABLED,
     } as never);
 
     await adminService.createUser(
       { userId: 'admin-1', role: UserRole.SUPER_ADMIN },
       {
-        email: 'student@example.com',
-        name: 'Student Demo',
-        role: UserRole.STUDENT,
+        email,
+        name: `${role} Demo`,
+        role,
         status: UserStatus.DISABLED,
       },
     );
@@ -94,9 +106,9 @@ describe('AdminService welcome email', () => {
     expect(sendPasswordSetupEmail).toHaveBeenCalledTimes(1);
     expect(sendPasswordSetupEmail).toHaveBeenCalledWith(
       expect.objectContaining({
-        to: 'student@example.com',
-        name: 'Student Demo',
-        role: UserRole.STUDENT,
+        to: email,
+        name: `${role} Demo`,
+        role,
         setupUrl: expect.stringContaining('/setup-password?token='),
       }),
     );

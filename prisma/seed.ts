@@ -1,6 +1,7 @@
 import { PrismaClient, OrganizationKind, UserRole, UserStatus, SubscriptionStatus } from '@prisma/client';
 import bcrypt from 'bcrypt';
 import dotenv from 'dotenv';
+import { DEFAULT_AI_MODEL_PRICING } from '../src/modules/ai/ai.pricing';
 
 dotenv.config();
 
@@ -22,8 +23,10 @@ async function main() {
 
   const email = process.env.SEED_SUPER_ADMIN_EMAIL ?? 'admin@softlogicwhiteboard.com';
   const name = process.env.SEED_SUPER_ADMIN_NAME ?? 'Softlogic Super Admin';
-  const adminPassword = process.env.SEED_SUPER_ADMIN_PASSWORD ?? 'admin123';
-  const passwordHash = await bcrypt.hash(adminPassword, 10);
+  const adminPassword = process.env.SEED_SUPER_ADMIN_PASSWORD;
+  const fallbackAdminPassword = 'admin123';
+  const passwordHash = adminPassword ? await bcrypt.hash(adminPassword, 10) : null;
+  const createPasswordHash = await bcrypt.hash(adminPassword ?? fallbackAdminPassword, 10);
 
   const superAdmin = await prisma.user.upsert({
     where: { email },
@@ -33,7 +36,7 @@ async function main() {
       status: UserStatus.ACTIVE,
       primaryOrganizationId: organization.id,
       isEmailVerified: true,
-      passwordHash,
+      ...(passwordHash ? { passwordHash } : {}),
     },
     create: {
       email,
@@ -42,7 +45,7 @@ async function main() {
       status: UserStatus.ACTIVE,
       primaryOrganizationId: organization.id,
       isEmailVerified: true,
-      passwordHash,
+      passwordHash: createPasswordHash,
     },
   });
 
@@ -88,6 +91,23 @@ async function main() {
         seatUsage: 1,
         startDate: new Date(),
         endDate: null,
+      },
+    });
+  }
+
+  for (const pricing of DEFAULT_AI_MODEL_PRICING) {
+    await prisma.aiModelPricing.upsert({
+      where: { modelId: pricing.modelId },
+      update: {},
+      create: {
+        provider: pricing.provider ?? 'gemini',
+        modelId: pricing.modelId,
+        billingType: pricing.billingType,
+        inputUsdMicrosPerMillion: pricing.inputUsdMicrosPerMillion,
+        outputUsdMicrosPerMillion: pricing.outputUsdMicrosPerMillion,
+        imageUsdMicrosEach: pricing.imageUsdMicrosEach,
+        searchUsdMicrosPerThousand: pricing.searchUsdMicrosPerThousand,
+        enabled: pricing.enabled ?? true,
       },
     });
   }

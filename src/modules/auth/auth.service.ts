@@ -7,17 +7,17 @@ import {
   User,
   UserRole,
   UserStatus,
-} from '@prisma/client';
-import bcrypt from 'bcrypt';
-import { randomBytes, randomUUID } from 'crypto';
-import { existsSync, readFileSync } from 'fs';
-import { resolve } from 'path';
+} from "@prisma/client";
+import bcrypt from "bcrypt";
+import { randomBytes, randomUUID } from "crypto";
+import { existsSync, readFileSync } from "fs";
+import { resolve } from "path";
 
-import { env, prisma } from '@/config';
-import { licensingService } from '@/modules/licensing/licensing.service';
-import { findUserContextById } from '@/modules/users/user-context.service';
-import { AuthError } from '@/shared/errors/AuthError';
-import { AppError } from '@/shared/errors/AppError';
+import { env, prisma } from "@/config";
+import { licensingService } from "@/modules/licensing/licensing.service";
+import { findUserContextById } from "@/modules/users/user-context.service";
+import { AuthError } from "@/shared/errors/AuthError";
+import { AppError } from "@/shared/errors/AppError";
 import {
   getBrandLogoEmailAttachments,
   getOtpEmailHtml,
@@ -25,27 +25,27 @@ import {
   sendPasswordChangedEmail,
   sendPasswordResetEmail,
   sendWelcomeEmail,
-} from '@/shared/utils/email';
-import { writeAuditLog } from '@/shared/utils/audit';
-import { generateTokenPair, verifyRefreshToken } from '@/shared/utils/jwt';
+} from "@/shared/utils/email";
+import { writeAuditLog } from "@/shared/utils/audit";
+import { generateTokenPair, verifyRefreshToken } from "@/shared/utils/jwt";
 import {
   generateOtp,
   hashOtp,
   verifyOtp as verifyOtpHash,
-} from '@/shared/utils/otp';
+} from "@/shared/utils/otp";
 
-import { authRepository } from './auth.repository';
+import { authRepository } from "./auth.repository";
 import {
   AuthResponse,
   DesktopGoogleAuthStartResponse,
   DesktopGoogleAuthStatusResponse,
-} from './auth.types';
-import { googleStrategy } from './strategies/google.strategy';
+} from "./auth.types";
+import { googleStrategy } from "./strategies/google.strategy";
 
 const OTP_EXPIRY_MINUTES = 10;
 const MAX_OTP_ATTEMPTS = 3;
 const MAX_OTP_SENDS_PER_HOUR = 3;
-const FALLBACK_FIXED_OTP = '1234';
+const FALLBACK_FIXED_OTP = "1234";
 const ADMIN_LOGIN_ROLES: UserRole[] = [
   UserRole.SUPER_ADMIN,
   UserRole.PARTNER_ADMIN,
@@ -63,10 +63,11 @@ const PASSWORD_LOGIN_ROLES: UserRole[] = [
 ];
 const PASSWORD_RESET_EXPIRY_HOURS = 24;
 const PASSWORD_SETUP_EXPIRY_DAYS = 7;
+const DEFAULT_REFRESH_SESSION_MS = 7 * 24 * 60 * 60 * 1000;
 const GOOGLE_DESKTOP_AUTH_EXPIRY_MINUTES = 10;
 const GOOGLE_DESKTOP_POLL_INTERVAL_MS = 2000;
-const GOOGLE_AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
-const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
+const GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
+const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
 let desktopGoogleCallbackLogoDataUri: string | null = null;
 type AuthDeviceInfo = Prisma.JsonObject;
 type AuthSessionTouchOptions = {
@@ -88,7 +89,31 @@ interface DesktopGoogleCallbackPageResponse {
   statusCode: number;
 }
 
-type DesktopGoogleCallbackVariant = 'success' | 'warning' | 'error';
+type DesktopGoogleCallbackVariant = "success" | "warning" | "error";
+
+const refreshSessionExpiresAt = (): Date =>
+  new Date(Date.now() + refreshSessionTtlMs());
+
+const refreshSessionTtlMs = (): number => {
+  const value = env.JWT_REFRESH_EXPIRES_IN.trim();
+  const match = /^(\d+)\s*(ms|s|m|h|d)?$/i.exec(value);
+  if (!match) {
+    return DEFAULT_REFRESH_SESSION_MS;
+  }
+  const amount = Number(match[1]);
+  const unit = (match[2] ?? "s").toLowerCase();
+  const multiplier =
+    unit === "ms"
+      ? 1
+      : unit === "s"
+        ? 1000
+        : unit === "m"
+          ? 60 * 1000
+          : unit === "h"
+            ? 60 * 60 * 1000
+            : 24 * 60 * 60 * 1000;
+  return amount > 0 ? amount * multiplier : DEFAULT_REFRESH_SESSION_MS;
+};
 
 export class AuthService {
   /**
@@ -100,12 +125,14 @@ export class AuthService {
   private async noActiveAccountError(email: string): Promise<AuthError> {
     const suspended = await authRepository.findDeletedUserByEmail(email);
     return suspended
-      ? AuthError.accountSuspended(await this.suspendedAccountDetails(suspended))
+      ? AuthError.accountSuspended(
+          await this.suspendedAccountDetails(suspended),
+        )
       : AuthError.invalidCredentials();
   }
 
   private async suspendedAccountDetails(
-    user: Pick<User, 'primaryOrganizationId'>,
+    user: Pick<User, "primaryOrganizationId">,
   ): Promise<Record<string, unknown>> {
     const [superAdminEmail, organization] = await Promise.all([
       authRepository.findActiveSuperAdminEmail(),
@@ -115,7 +142,7 @@ export class AuthService {
     ]);
 
     return {
-      reason: 'ACCOUNT_SUSPENDED',
+      reason: "ACCOUNT_SUSPENDED",
       contact: {
         superAdminEmail: superAdminEmail ?? null,
         organizationName: organization?.name ?? null,
@@ -126,7 +153,7 @@ export class AuthService {
   }
 
   private async accountSuspendedError(
-    user: Pick<User, 'primaryOrganizationId'>,
+    user: Pick<User, "primaryOrganizationId">,
   ): Promise<AuthError> {
     return AuthError.accountSuspended(await this.suspendedAccountDetails(user));
   }
@@ -146,7 +173,10 @@ export class AuthService {
       OtpType.EMAIL_LOGIN,
       oneHourAgo,
     );
-    if (!this.shouldRelaxAuthLimits && recentOtpCount >= MAX_OTP_SENDS_PER_HOUR) {
+    if (
+      !this.shouldRelaxAuthLimits &&
+      recentOtpCount >= MAX_OTP_SENDS_PER_HOUR
+    ) {
       throw AuthError.rateLimited();
     }
 
@@ -169,14 +199,14 @@ export class AuthService {
         attachments:
           brandLogoAttachments.length > 0 ? brandLogoAttachments : undefined,
         to: email,
-        subject: 'Your Softlogic Whiteboard Login Code',
+        subject: "Your Softlogic Whiteboard Login Code",
         html: getOtpEmailHtml(otpCode),
       });
     } catch {
       console.log(`OTP for ${email}: ${otpCode}`);
     }
 
-    return { message: 'OTP sent successfully' };
+    return { message: "OTP sent successfully" };
   }
 
   async verifyOtp(
@@ -194,7 +224,10 @@ export class AuthService {
       throw await this.accountSuspendedError(user);
     }
 
-    const otp = await authRepository.findLatestOtp(user.id, OtpType.EMAIL_LOGIN);
+    const otp = await authRepository.findLatestOtp(
+      user.id,
+      OtpType.EMAIL_LOGIN,
+    );
     if (!otp) {
       throw AuthError.otpInvalid();
     }
@@ -239,13 +272,17 @@ export class AuthService {
     };
     const tokens = generateTokenPair(tokenPayload);
 
-    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
-    await this.touchOwnSession(user.id, {
-      clientSessionId,
-      currentRefreshToken: tokens.refreshToken,
-      deviceInfo,
-      ipAddress,
-    }, expiresAt);
+    const expiresAt = refreshSessionExpiresAt();
+    await this.touchOwnSession(
+      user.id,
+      {
+        clientSessionId,
+        currentRefreshToken: tokens.refreshToken,
+        deviceInfo,
+        ipAddress,
+      },
+      expiresAt,
+    );
 
     const safeUser = await findUserContextById(user.id);
     if (!safeUser) {
@@ -336,13 +373,17 @@ export class AuthService {
     };
     const tokens = generateTokenPair(tokenPayload);
 
-    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
-    await this.touchOwnSession(user.id, {
-      clientSessionId,
-      currentRefreshToken: tokens.refreshToken,
-      deviceInfo,
-      ipAddress,
-    }, expiresAt);
+    const expiresAt = refreshSessionExpiresAt();
+    await this.touchOwnSession(
+      user.id,
+      {
+        clientSessionId,
+        currentRefreshToken: tokens.refreshToken,
+        deviceInfo,
+        ipAddress,
+      },
+      expiresAt,
+    );
 
     const safeUser = await findUserContextById(user.id);
     if (!safeUser) {
@@ -362,7 +403,7 @@ export class AuthService {
     clientSessionId?: string | null,
   ): Promise<AuthResponse> {
     if (!idToken.trim()) {
-      throw new AppError('Google ID token is required', 400);
+      throw new AppError("Google ID token is required", 400);
     }
 
     const googleUser = await googleStrategy.verifyIdToken(idToken);
@@ -408,13 +449,17 @@ export class AuthService {
     };
     const tokens = generateTokenPair(tokenPayload);
 
-    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
-    await this.touchOwnSession(user.id, {
-      clientSessionId,
-      currentRefreshToken: tokens.refreshToken,
-      deviceInfo,
-      ipAddress,
-    }, expiresAt);
+    const expiresAt = refreshSessionExpiresAt();
+    await this.touchOwnSession(
+      user.id,
+      {
+        clientSessionId,
+        currentRefreshToken: tokens.refreshToken,
+        deviceInfo,
+        ipAddress,
+      },
+      expiresAt,
+    );
 
     const safeUser = await findUserContextById(user.id);
     if (!safeUser) {
@@ -460,10 +505,10 @@ export class AuthService {
     const { code, error, errorDescription, ipAddress, state } = params;
     if (!state?.trim()) {
       return this.renderDesktopGoogleCallbackPage({
-        message: 'This sign-in request is missing its verification state.',
+        message: "This sign-in request is missing its verification state.",
         statusCode: 400,
-        variant: 'warning',
-        title: 'Sign-in could not be completed',
+        variant: "warning",
+        title: "Sign-in could not be completed",
       });
     }
 
@@ -472,27 +517,27 @@ export class AuthService {
     );
     if (!attempt) {
       return this.renderDesktopGoogleCallbackPage({
-        message: 'This sign-in request could not be found.',
+        message: "This sign-in request could not be found.",
         statusCode: 404,
-        variant: 'warning',
-        title: 'We could not find this sign-in request',
+        variant: "warning",
+        title: "We could not find this sign-in request",
       });
     }
 
     const expiredAttempt = await this.expireAttemptIfNeeded(attempt);
     if (expiredAttempt) {
       return this.renderDesktopGoogleCallbackPage({
-        message: 'This sign-in request has expired.',
+        message: "This sign-in request has expired.",
         statusCode: 410,
-        variant: 'warning',
-        title: 'Your sign-in link has expired',
+        variant: "warning",
+        title: "Your sign-in link has expired",
       });
     }
 
     if (error?.trim()) {
       const message =
         errorDescription?.trim() ||
-        'Google sign-in was cancelled before it completed.';
+        "Google sign-in was cancelled before it completed.";
       await authRepository.updateGoogleDesktopAuthAttempt(attempt.id, {
         errorMessage: message,
         status: GoogleDesktopAuthAttemptStatus.FAILED,
@@ -500,21 +545,21 @@ export class AuthService {
       return this.renderDesktopGoogleCallbackPage({
         message,
         statusCode: 400,
-        variant: 'warning',
-        title: 'Sign-in cancelled',
+        variant: "warning",
+        title: "Sign-in cancelled",
       });
     }
 
     if (!code?.trim()) {
       await authRepository.updateGoogleDesktopAuthAttempt(attempt.id, {
-        errorMessage: 'Google did not return an authorization code.',
+        errorMessage: "Google did not return an authorization code.",
         status: GoogleDesktopAuthAttemptStatus.FAILED,
       });
       return this.renderDesktopGoogleCallbackPage({
-        message: 'Google did not return an authorization code.',
+        message: "Google did not return an authorization code.",
         statusCode: 400,
-        variant: 'error',
-        title: 'Sign-in could not be completed',
+        variant: "error",
+        title: "Sign-in could not be completed",
       });
     }
 
@@ -535,10 +580,10 @@ export class AuthService {
       });
 
       return this.renderDesktopGoogleCallbackPage({
-        message: 'Google sign-in is complete.',
+        message: "Google sign-in is complete.",
         statusCode: 200,
-        variant: 'success',
-        title: 'You are signed in',
+        variant: "success",
+        title: "You are signed in",
       });
     } catch (error) {
       const message = this.getDesktopGoogleFailureMessage(error);
@@ -550,8 +595,8 @@ export class AuthService {
       return this.renderDesktopGoogleCallbackPage({
         message,
         statusCode: error instanceof AppError ? error.statusCode : 500,
-        variant: 'error',
-        title: 'Sign-in failed',
+        variant: "error",
+        title: "Sign-in failed",
       });
     }
   }
@@ -559,17 +604,19 @@ export class AuthService {
   async getDesktopGoogleSignInStatus(
     attemptId: string,
   ): Promise<DesktopGoogleAuthStatusResponse> {
-    const attempt = await authRepository.findGoogleDesktopAuthAttemptById(attemptId);
+    const attempt =
+      await authRepository.findGoogleDesktopAuthAttemptById(attemptId);
     if (!attempt) {
-      throw new AppError('Google sign-in session was not found.', 404);
+      throw new AppError("Google sign-in session was not found.", 404);
     }
 
-    const refreshedAttempt = (await this.expireAttemptIfNeeded(attempt)) ?? attempt;
+    const refreshedAttempt =
+      (await this.expireAttemptIfNeeded(attempt)) ?? attempt;
 
     if (refreshedAttempt.status === GoogleDesktopAuthAttemptStatus.PENDING) {
       return {
-        message: 'Waiting for Google sign-in to complete.',
-        status: 'pending',
+        message: "Waiting for Google sign-in to complete.",
+        status: "pending",
       };
     }
 
@@ -577,36 +624,40 @@ export class AuthService {
       return {
         message:
           refreshedAttempt.errorMessage ??
-          'Google sign-in session expired. Please try again.',
-        status: 'expired',
+          "Google sign-in session expired. Please try again.",
+        status: "expired",
       };
     }
 
     if (refreshedAttempt.status === GoogleDesktopAuthAttemptStatus.FAILED) {
       return {
         message:
-          refreshedAttempt.errorMessage ?? 'Google sign-in could not be completed.',
-        status: 'failed',
+          refreshedAttempt.errorMessage ??
+          "Google sign-in could not be completed.",
+        status: "failed",
       };
     }
 
     if (refreshedAttempt.consumedAt) {
       return {
         message:
-          'Google sign-in has already been completed for this request. Please start again if needed.',
-        status: 'failed',
+          "Google sign-in has already been completed for this request. Please start again if needed.",
+        status: "failed",
       };
     }
 
-    const session = this.deserializeAuthResponse(refreshedAttempt.sessionPayload);
+    const session = this.deserializeAuthResponse(
+      refreshedAttempt.sessionPayload,
+    );
     if (!session) {
       await authRepository.updateGoogleDesktopAuthAttempt(refreshedAttempt.id, {
-        errorMessage: 'Google sign-in finished without a valid session payload.',
+        errorMessage:
+          "Google sign-in finished without a valid session payload.",
         status: GoogleDesktopAuthAttemptStatus.FAILED,
       });
       return {
-        message: 'Google sign-in finished without a valid session payload.',
-        status: 'failed',
+        message: "Google sign-in finished without a valid session payload.",
+        status: "failed",
       };
     }
 
@@ -617,15 +668,15 @@ export class AuthService {
     if (!consumed) {
       return {
         message:
-          'Google sign-in has already been completed for this request. Please start again if needed.',
-        status: 'failed',
+          "Google sign-in has already been completed for this request. Please start again if needed.",
+        status: "failed",
       };
     }
 
     return {
-      message: 'Google sign-in completed successfully.',
+      message: "Google sign-in completed successfully.",
       session,
-      status: 'completed',
+      status: "completed",
     };
   }
 
@@ -670,17 +721,21 @@ export class AuthService {
       };
       const tokens = generateTokenPair(tokenPayload);
 
-      const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
-      await this.touchOwnSession(user.id, {
-        clientSessionId: clientSessionId ?? session.clientSessionId,
-        currentRefreshToken: refreshToken,
-        nextRefreshToken: tokens.refreshToken,
-        deviceInfo:
-          deviceInfo && Object.keys(deviceInfo).length > 0
-            ? deviceInfo
-            : ((session.deviceInfo as AuthDeviceInfo | null) ?? undefined),
-        ipAddress: ipAddress ?? session.ipAddress ?? undefined,
-      }, expiresAt);
+      const expiresAt = refreshSessionExpiresAt();
+      await this.touchOwnSession(
+        user.id,
+        {
+          clientSessionId: clientSessionId ?? session.clientSessionId,
+          currentRefreshToken: refreshToken,
+          nextRefreshToken: tokens.refreshToken,
+          deviceInfo:
+            deviceInfo && Object.keys(deviceInfo).length > 0
+              ? deviceInfo
+              : ((session.deviceInfo as AuthDeviceInfo | null) ?? undefined),
+          ipAddress: ipAddress ?? session.ipAddress ?? undefined,
+        },
+        expiresAt,
+      );
 
       const safeUser = await findUserContextById(user.id);
       if (!safeUser) {
@@ -710,7 +765,7 @@ export class AuthService {
   async listOwnSessions(
     userId: string,
     currentRefreshToken?: string | null,
-    options?: Omit<AuthSessionTouchOptions, 'currentRefreshToken'>,
+    options?: Omit<AuthSessionTouchOptions, "currentRefreshToken">,
   ): Promise<
     Array<{
       id: string;
@@ -741,8 +796,8 @@ export class AuthService {
       expiresAt: session.expiresAt,
       isCurrent: Boolean(
         (currentToken && session.refreshToken === currentToken) ||
-          (options?.clientSessionId &&
-            session.clientSessionId === options.clientSessionId),
+        (options?.clientSessionId &&
+          session.clientSessionId === options.clientSessionId),
       ),
     }));
   }
@@ -763,28 +818,29 @@ export class AuthService {
   ): Promise<{ message: string }> {
     const session = await authRepository.findUserSessionById(userId, sessionId);
     if (!session) {
-      throw new AppError('Login session not found', 404);
+      throw new AppError("Login session not found", 404);
     }
 
     const currentToken = currentRefreshToken?.trim();
     if (
       (currentToken && session.refreshToken === currentToken) ||
-      (currentClientSessionId && session.clientSessionId === currentClientSessionId)
+      (currentClientSessionId &&
+        session.clientSessionId === currentClientSessionId)
     ) {
-      throw new AppError('Use Sign out to end your current session', 400);
+      throw new AppError("Use Sign out to end your current session", 400);
     }
 
     await authRepository.updateSession(session.id, {
       refreshToken: null,
       revokedAt: new Date(),
     });
-    return { message: 'Login session revoked successfully' };
+    return { message: "Login session revoked successfully" };
   }
 
   private async touchOwnSession(
     userId: string,
     options: AuthSessionTouchOptions,
-    expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+    expiresAt = refreshSessionExpiresAt(),
   ) {
     const now = new Date();
     const refreshToken = options.currentRefreshToken?.trim() || null;
@@ -807,11 +863,14 @@ export class AuthService {
     if (tokenSession && tokenSession.userId !== userId) {
       throw AuthError.tokenInvalid();
     }
-    if (tokenSession?.revokedAt) {
+    if (clientSession && clientSession.userId !== userId) {
       throw AuthError.tokenInvalid();
     }
 
     const session = clientSession ?? tokenSession;
+    if (session?.revokedAt && tokenSession) {
+      throw AuthError.tokenInvalid();
+    }
 
     if (tokenSession && clientSession && tokenSession.id !== clientSession.id) {
       await authRepository.deleteSession(tokenSession.id);
@@ -860,19 +919,26 @@ export class AuthService {
       otp.usedAt ||
       new Date() > otp.expiresAt
     ) {
-      throw new AppError('Password setup link is invalid or expired', 400);
+      throw new AppError("Password setup link is invalid or expired", 400);
     }
 
-    if (!otp.user || otp.user.deletedAt || otp.user.status !== UserStatus.ACTIVE) {
-      throw new AppError('Password setup account is not active', 400);
+    if (
+      !otp.user ||
+      otp.user.deletedAt ||
+      otp.user.status !== UserStatus.ACTIVE
+    ) {
+      throw new AppError("Password setup account is not active", 400);
     }
     if (!PASSWORD_LOGIN_ROLES.includes(otp.user.role)) {
-      throw new AppError('Password setup is only available for portal accounts', 403);
+      throw new AppError(
+        "Password setup is only available for portal accounts",
+        403,
+      );
     }
 
     const matches = await bcrypt.compare(secret, otp.code);
     if (!matches) {
-      throw new AppError('Password setup link is invalid or expired', 400);
+      throw new AppError("Password setup link is invalid or expired", 400);
     }
 
     return {
@@ -895,7 +961,7 @@ export class AuthService {
     const passwordHash = await bcrypt.hash(input.password, 10);
     const otp = await authRepository.findOtpById(otpId);
     if (!otp) {
-      throw new AppError('Password setup link is invalid or expired', 400);
+      throw new AppError("Password setup link is invalid or expired", 400);
     }
 
     await authRepository.updateUser(otp.userId, {
@@ -908,10 +974,10 @@ export class AuthService {
     try {
       await writeAuditLog({
         actorUserId: otp.userId,
-        action: 'auth.password.complete',
-        targetType: 'user',
+        action: "auth.password.complete",
+        targetType: "user",
         targetId: otp.userId,
-        summary: 'User completed password setup',
+        summary: "User completed password setup",
         ip: ipAddress,
       });
     } catch {
@@ -930,7 +996,7 @@ export class AuthService {
 
     return {
       email: setup.email,
-      message: 'Password set successfully',
+      message: "Password set successfully",
     };
   }
 
@@ -951,12 +1017,12 @@ export class AuthService {
       throw AuthError.invalidCredentials();
     }
     if (!user.passwordHash) {
-      throw new AppError('Current password is incorrect', 400);
+      throw new AppError("Current password is incorrect", 400);
     }
 
     const matches = await bcrypt.compare(currentPassword, user.passwordHash);
     if (!matches) {
-      throw new AppError('Current password is incorrect', 400);
+      throw new AppError("Current password is incorrect", 400);
     }
 
     const passwordHash = await bcrypt.hash(newPassword, 10);
@@ -974,10 +1040,10 @@ export class AuthService {
     try {
       await writeAuditLog({
         actorUserId: user.id,
-        action: 'auth.password.change',
-        targetType: 'user',
+        action: "auth.password.change",
+        targetType: "user",
         targetId: user.id,
-        summary: 'User changed password',
+        summary: "User changed password",
         ip: options?.ipAddress,
       });
     } catch {
@@ -994,7 +1060,7 @@ export class AuthService {
       // Fire-and-forget — email failure must not break the password change.
     }
 
-    return { message: 'Password changed successfully' };
+    return { message: "Password changed successfully" };
   }
 
   async changePasswordWithCurrent(
@@ -1005,8 +1071,12 @@ export class AuthService {
   ): Promise<{ message: string }> {
     const normalizedEmail = email.trim().toLowerCase();
     const user = await authRepository.findUserByEmail(normalizedEmail);
-    if (!user || !user.passwordHash || !PASSWORD_LOGIN_ROLES.includes(user.role)) {
-      throw new AppError('Current password is incorrect', 400);
+    if (
+      !user ||
+      !user.passwordHash ||
+      !PASSWORD_LOGIN_ROLES.includes(user.role)
+    ) {
+      throw new AppError("Current password is incorrect", 400);
     }
     if (user.status !== UserStatus.ACTIVE) {
       throw await this.accountSuspendedError(user);
@@ -1014,7 +1084,7 @@ export class AuthService {
 
     const matches = await bcrypt.compare(currentPassword, user.passwordHash);
     if (!matches) {
-      throw new AppError('Current password is incorrect', 400);
+      throw new AppError("Current password is incorrect", 400);
     }
 
     const passwordHash = await bcrypt.hash(newPassword, 10);
@@ -1027,10 +1097,10 @@ export class AuthService {
     try {
       await writeAuditLog({
         actorUserId: user.id,
-        action: 'auth.password.change_with_current',
-        targetType: 'user',
+        action: "auth.password.change_with_current",
+        targetType: "user",
         targetId: user.id,
-        summary: 'User changed password using current password from reset flow',
+        summary: "User changed password using current password from reset flow",
         ip: ipAddress,
       });
     } catch {
@@ -1047,7 +1117,7 @@ export class AuthService {
       // Fire-and-forget — email failure must not break the password change.
     }
 
-    return { message: 'Password changed successfully' };
+    return { message: "Password changed successfully" };
   }
 
   async requestPasswordResetOtp(
@@ -1055,14 +1125,18 @@ export class AuthService {
     ipAddress?: string,
   ): Promise<{ message: string }> {
     const genericMessage =
-      'If the email matches a SoftLogic account, a password reset code has been sent.';
+      "If the email matches a SoftLogic account, a password reset code has been sent.";
     const normalizedEmail = email.trim().toLowerCase();
     if (!normalizedEmail) {
       return { message: genericMessage };
     }
 
     const user = await authRepository.findUserByEmail(normalizedEmail);
-    if (!user || !user.passwordHash || !PASSWORD_LOGIN_ROLES.includes(user.role)) {
+    if (
+      !user ||
+      !user.passwordHash ||
+      !PASSWORD_LOGIN_ROLES.includes(user.role)
+    ) {
       return { message: genericMessage };
     }
     if (user.status !== UserStatus.ACTIVE) {
@@ -1075,7 +1149,10 @@ export class AuthService {
       OtpType.PASSWORD_RESET,
       oneHourAgo,
     );
-    if (!this.shouldRelaxAuthLimits && recentOtpCount >= MAX_OTP_SENDS_PER_HOUR) {
+    if (
+      !this.shouldRelaxAuthLimits &&
+      recentOtpCount >= MAX_OTP_SENDS_PER_HOUR
+    ) {
       throw AuthError.rateLimited();
     }
 
@@ -1095,10 +1172,10 @@ export class AuthService {
     try {
       await writeAuditLog({
         actorUserId: user.id,
-        action: 'auth.password_reset_otp.request',
-        targetType: 'user',
+        action: "auth.password_reset_otp.request",
+        targetType: "user",
         targetId: user.id,
-        summary: 'User requested a password reset OTP',
+        summary: "User requested a password reset OTP",
         ip: ipAddress,
       });
     } catch {
@@ -1111,7 +1188,7 @@ export class AuthService {
         attachments:
           brandLogoAttachments.length > 0 ? brandLogoAttachments : undefined,
         to: user.email,
-        subject: 'Your Softlogic Whiteboard Password Reset Code',
+        subject: "Your Softlogic Whiteboard Password Reset Code",
         html: getOtpEmailHtml(otpCode),
       });
     } catch {
@@ -1126,7 +1203,7 @@ export class AuthService {
     code: string,
   ): Promise<{ message: string }> {
     await this.assertValidPasswordResetOtp(email, code);
-    return { message: 'OTP verified successfully' };
+    return { message: "OTP verified successfully" };
   }
 
   async completePasswordResetOtp(
@@ -1148,10 +1225,10 @@ export class AuthService {
     try {
       await writeAuditLog({
         actorUserId: user.id,
-        action: 'auth.password_reset_otp.complete',
-        targetType: 'user',
+        action: "auth.password_reset_otp.complete",
+        targetType: "user",
         targetId: user.id,
-        summary: 'User completed password reset with OTP',
+        summary: "User completed password reset with OTP",
         ip: ipAddress,
       });
     } catch {
@@ -1168,7 +1245,7 @@ export class AuthService {
       // Fire-and-forget — email failure must not break the password reset.
     }
 
-    return { message: 'Password changed successfully' };
+    return { message: "Password changed successfully" };
   }
 
   private async assertValidPasswordResetOtp(
@@ -1177,14 +1254,21 @@ export class AuthService {
   ): Promise<{ user: User; otp: Otp }> {
     const normalizedEmail = email.trim().toLowerCase();
     const user = await authRepository.findUserByEmail(normalizedEmail);
-    if (!user || !user.passwordHash || !PASSWORD_LOGIN_ROLES.includes(user.role)) {
+    if (
+      !user ||
+      !user.passwordHash ||
+      !PASSWORD_LOGIN_ROLES.includes(user.role)
+    ) {
       throw AuthError.otpInvalid();
     }
     if (user.status !== UserStatus.ACTIVE) {
       throw await this.accountSuspendedError(user);
     }
 
-    const otp = await authRepository.findLatestOtp(user.id, OtpType.PASSWORD_RESET);
+    const otp = await authRepository.findLatestOtp(
+      user.id,
+      OtpType.PASSWORD_RESET,
+    );
     if (!otp) {
       throw AuthError.otpInvalid();
     }
@@ -1226,7 +1310,7 @@ export class AuthService {
     ipAddress?: string,
   ): Promise<{ message: string }> {
     const genericMessage =
-      'If the email matches a SoftLogic account, a password reset link has been sent.';
+      "If the email matches a SoftLogic account, a password reset link has been sent.";
     const normalizedEmail = email.trim().toLowerCase();
     if (!normalizedEmail) {
       return { message: genericMessage };
@@ -1245,10 +1329,10 @@ export class AuthService {
     try {
       await writeAuditLog({
         actorUserId: user.id,
-        action: 'auth.password_reset.request',
-        targetType: 'user',
+        action: "auth.password_reset.request",
+        targetType: "user",
         targetId: user.id,
-        summary: 'User requested a password reset',
+        summary: "User requested a password reset",
         ip: ipAddress,
       });
     } catch {
@@ -1276,7 +1360,7 @@ export class AuthService {
       data: { usedAt: new Date() },
     });
 
-    const secret = randomBytes(32).toString('hex');
+    const secret = randomBytes(32).toString("hex");
     const otp = await prisma.otp.create({
       data: {
         userId,
@@ -1291,7 +1375,10 @@ export class AuthService {
   }
 
   private passwordResetUrl(token: string): string {
-    const baseUrl = (env.PUBLIC_ADMIN_URL || env.PUBLIC_APP_URL).replace(/\/+$/, '');
+    const baseUrl = (env.PUBLIC_ADMIN_URL || env.PUBLIC_APP_URL).replace(
+      /\/+$/,
+      "",
+    );
     return `${baseUrl}/setup-password?token=${encodeURIComponent(token)}&mode=reset`;
   }
 
@@ -1301,23 +1388,23 @@ export class AuthService {
    */
   get passwordSetupExpiryLabel(): string {
     const days: number = PASSWORD_SETUP_EXPIRY_DAYS;
-    return `${days} day${days === 1 ? '' : 's'}`;
+    return `${days} day${days === 1 ? "" : "s"}`;
   }
 
   private parsePasswordSetupToken(token: string): {
     otpId: string;
     secret: string;
   } {
-    const [otpId, secret, ...rest] = token.trim().split('.');
+    const [otpId, secret, ...rest] = token.trim().split(".");
     if (!otpId || !secret || rest.length > 0) {
-      throw new AppError('Password setup link is invalid or expired', 400);
+      throw new AppError("Password setup link is invalid or expired", 400);
     }
 
     return { otpId, secret };
   }
 
   private get fixedOtpCode(): string | null {
-    if (!env.DEV_FIXED_OTP_ENABLED) {
+    if (this.isProductionMode || !env.DEV_FIXED_OTP_ENABLED) {
       return null;
     }
 
@@ -1325,13 +1412,13 @@ export class AuthService {
   }
 
   private get fixedOtpAllowedEmails(): Set<string> {
-    if (!env.DEV_FIXED_OTP_ENABLED) {
+    if (this.isProductionMode || !env.DEV_FIXED_OTP_ENABLED) {
       return new Set<string>();
     }
 
     return new Set(
-      (env.DEV_FIXED_OTP_ALLOWED_EMAILS ?? '')
-        .split(',')
+      (env.DEV_FIXED_OTP_ALLOWED_EMAILS ?? "")
+        .split(",")
         .map((value) => value.trim().toLowerCase())
         .filter(Boolean),
     );
@@ -1350,7 +1437,23 @@ export class AuthService {
       return true;
     }
 
+    if (!(this.isDevelopmentMode || this.isTestMode)) {
+      return false;
+    }
+
     return this.fixedOtpAllowedEmails.has(email);
+  }
+
+  private get isDevelopmentMode(): boolean {
+    return env.NODE_ENV === "development";
+  }
+
+  private get isProductionMode(): boolean {
+    return env.NODE_ENV === "production";
+  }
+
+  private get isTestMode(): boolean {
+    return env.NODE_ENV === "test";
   }
 
   private ensureGoogleDesktopAuthConfigured(): void {
@@ -1360,7 +1463,7 @@ export class AuthService {
       !env.GOOGLE_OAUTH_REDIRECT_URI
     ) {
       throw new AppError(
-        'Google desktop sign-in is not configured on the server.',
+        "Google desktop sign-in is not configured on the server.",
         503,
       );
     }
@@ -1368,14 +1471,14 @@ export class AuthService {
 
   private buildGoogleDesktopAuthUrl(state: string): string {
     const authUrl = new URL(GOOGLE_AUTH_URL);
-    authUrl.searchParams.set('client_id', env.GOOGLE_CLIENT_ID!);
-    authUrl.searchParams.set('redirect_uri', env.GOOGLE_OAUTH_REDIRECT_URI!);
-    authUrl.searchParams.set('response_type', 'code');
-    authUrl.searchParams.set('scope', 'openid email profile');
-    authUrl.searchParams.set('access_type', 'offline');
-    authUrl.searchParams.set('include_granted_scopes', 'true');
-    authUrl.searchParams.set('prompt', 'select_account');
-    authUrl.searchParams.set('state', state);
+    authUrl.searchParams.set("client_id", env.GOOGLE_CLIENT_ID!);
+    authUrl.searchParams.set("redirect_uri", env.GOOGLE_OAUTH_REDIRECT_URI!);
+    authUrl.searchParams.set("response_type", "code");
+    authUrl.searchParams.set("scope", "openid email profile");
+    authUrl.searchParams.set("access_type", "offline");
+    authUrl.searchParams.set("include_granted_scopes", "true");
+    authUrl.searchParams.set("prompt", "select_account");
+    authUrl.searchParams.set("state", state);
     return authUrl.toString();
   }
 
@@ -1384,16 +1487,16 @@ export class AuthService {
       client_id: env.GOOGLE_CLIENT_ID!,
       client_secret: env.GOOGLE_CLIENT_SECRET!,
       code,
-      grant_type: 'authorization_code',
+      grant_type: "authorization_code",
       redirect_uri: env.GOOGLE_OAUTH_REDIRECT_URI!,
     });
 
     const response = await fetch(GOOGLE_TOKEN_URL, {
       body: payload,
       headers: {
-        'content-type': 'application/x-www-form-urlencoded',
+        "content-type": "application/x-www-form-urlencoded",
       },
-      method: 'POST',
+      method: "POST",
     });
 
     const body = (await response.json()) as GoogleTokenExchangeResponse;
@@ -1401,13 +1504,13 @@ export class AuthService {
       throw new AppError(
         body.error_description?.trim() ||
           body.error?.trim() ||
-          'Unable to complete Google sign-in with Google.',
+          "Unable to complete Google sign-in with Google.",
         502,
       );
     }
 
     if (!body.id_token?.trim()) {
-      throw new AppError('Google sign-in did not return an ID token.', 502);
+      throw new AppError("Google sign-in did not return an ID token.", 502);
     }
 
     return body.id_token.trim();
@@ -1424,7 +1527,7 @@ export class AuthService {
     }
 
     return authRepository.updateGoogleDesktopAuthAttempt(attempt.id, {
-      errorMessage: 'Google sign-in session expired. Please try again.',
+      errorMessage: "Google sign-in session expired. Please try again.",
       status: GoogleDesktopAuthAttemptStatus.EXPIRED,
     });
   }
@@ -1436,7 +1539,7 @@ export class AuthService {
   private deserializeAuthResponse(
     payload: Prisma.JsonValue | null,
   ): AuthResponse | null {
-    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
       return null;
     }
 
@@ -1452,7 +1555,7 @@ export class AuthService {
       return error.message.trim();
     }
 
-    return 'Google sign-in could not be completed. Please try again.';
+    return "Google sign-in could not be completed. Please try again.";
   }
 
   private renderDesktopGoogleCallbackPage(params: {
@@ -1463,13 +1566,13 @@ export class AuthService {
   }): DesktopGoogleCallbackPageResponse {
     const classNames = {
       success: {
-        cardBorder: 'rgba(15, 157, 88, 0.16)',
+        cardBorder: "rgba(15, 157, 88, 0.16)",
       },
       warning: {
-        cardBorder: 'rgba(245, 158, 11, 0.18)',
+        cardBorder: "rgba(245, 158, 11, 0.18)",
       },
       error: {
-        cardBorder: 'rgba(216, 58, 58, 0.16)',
+        cardBorder: "rgba(216, 58, 58, 0.16)",
       },
     }[params.variant];
     const escapedTitle = this.escapeHtml(params.title);
@@ -1477,7 +1580,7 @@ export class AuthService {
     const logoDataUri = this.getDesktopGoogleCallbackLogoDataUri();
     const brandSection = logoDataUri
       ? `<div class="brand"><img src="${logoDataUri}" alt="SoftLogic" class="brand-logo" /></div>`
-      : '';
+      : "";
     const html = `<!DOCTYPE html>
 <html lang="en">
   <head>
@@ -1589,33 +1692,40 @@ export class AuthService {
     }
 
     const candidatePaths = [
-      resolve(process.cwd(), 'src', 'modules', 'auth', 'assets', 'softlogic-logo.png'),
-      resolve(__dirname, 'assets', 'softlogic-logo.png'),
+      resolve(
+        process.cwd(),
+        "src",
+        "modules",
+        "auth",
+        "assets",
+        "softlogic-logo.png",
+      ),
+      resolve(__dirname, "assets", "softlogic-logo.png"),
     ];
 
     for (const candidatePath of candidatePaths) {
       if (existsSync(candidatePath)) {
-        desktopGoogleCallbackLogoDataUri = `data:image/png;base64,${readFileSync(candidatePath).toString('base64')}`;
+        desktopGoogleCallbackLogoDataUri = `data:image/png;base64,${readFileSync(candidatePath).toString("base64")}`;
         return desktopGoogleCallbackLogoDataUri;
       }
     }
 
-    return '';
+    return "";
   }
 
   private escapeHtml(value: string): string {
     return value
-      .replaceAll('&', '&amp;')
-      .replaceAll('<', '&lt;')
-      .replaceAll('>', '&gt;')
-      .replaceAll('"', '&quot;')
-      .replaceAll("'", '&#39;');
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#39;");
   }
 
   private renderDesktopGoogleCallbackIcon(
     variant: DesktopGoogleCallbackVariant,
   ): string {
-    if (variant === 'success') {
+    if (variant === "success") {
       return `
         <svg viewBox="0 0 48 48" role="presentation">
           <path d="M14 24.5l7 7 13-15" />
@@ -1624,7 +1734,7 @@ export class AuthService {
       `;
     }
 
-    if (variant === 'warning') {
+    if (variant === "warning") {
       return `
         <svg viewBox="0 0 48 48" role="presentation">
           <path d="M24 9l15 26H9L24 9z" />

@@ -15,7 +15,7 @@ const swaggerOptions: swaggerJsdoc.Options = {
     },
     servers: [
       {
-        url: 'https://softlogic-whiteboard-backend-testin.vercel.app/api/v1',
+        url: 'https://softlogic-api.mymultimeds.com/api/v1',
         description: 'Production server',
       },
       {

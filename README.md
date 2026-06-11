@@ -17,7 +17,10 @@ This starts:
 
 ### 2. Create your local `.env`
 
-Copy `.env.example` to `.env` and update any machine-specific values.
+Copy `.env.development.example` to `.env.development` or copy
+`.env.example` to `.env`, then update any machine-specific values. The config
+loader reads `.env.<NODE_ENV>` first and then `.env`, so production deployments
+can use `.env.production` while local development can use `.env.development`.
 
 Important local defaults:
 
@@ -53,13 +56,15 @@ If SMTP delivery is unavailable on the machine or network, the invite-only OTP f
 
 ### Temporary fixed OTP support
 
-The backend also supports an optional fixed OTP fallback for testing:
+The backend also supports an optional fixed OTP fallback for local development
+and tests only:
 
 - enable with `DEV_FIXED_OTP_ENABLED=true`
 - default fallback code is `1234`
 - restrict usage with `DEV_FIXED_OTP_ALLOWED_EMAILS=email1@example.com,email2@example.com`
 
-This fallback is intended to be temporary and should be limited to explicit test/admin emails. All other users must continue using the real emailed OTP.
+This fallback is ignored in `NODE_ENV=production`. Production must keep
+`DEV_FIXED_OTP_ENABLED=false`, and all users must verify the real emailed OTP.
 
 ### Google sign-in behavior
 
@@ -84,7 +89,6 @@ These validate the seeded invite-only auth path and backend whiteboard CRUD agai
 npm run local:db:down
 ```
 
-
 Current role hierarchy in the backend is:
 
 SUPER_ADMIN
@@ -93,7 +97,7 @@ CUSTOMER_ADMIN and ADMIN
 TEACHER
 STUDENT
 
-------------------------------------------------------------------------
+---
 
 SUPER_ADMIN can manage everyone.
 PARTNER_ADMIN can manage CUSTOMER_ADMIN, TEACHER, and STUDENT.

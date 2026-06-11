@@ -1,4 +1,5 @@
 import { existsSync } from 'fs';
+import { readFile } from 'fs/promises';
 import { resolve } from 'path';
 
 import nodemailer from 'nodemailer';
@@ -18,6 +19,9 @@ const transporter = nodemailer.createTransport({
     pass: env.SMTP_PASS,
   },
 });
+
+const isBrevoConfigured = (): boolean =>
+  env.EMAIL_PROVIDER === 'brevo' && Boolean(env.BREVO_API_KEY?.trim());
 
 interface EmailOptions {
   to: string;
@@ -82,18 +86,79 @@ interface SessionsRevokedEmailOptions {
 
 export const sendEmail = async (options: EmailOptions): Promise<void> => {
   try {
-    await transporter.sendMail({
-      attachments: options.attachments,
-      from: `"${env.EMAIL_FROM_NAME}" <${env.EMAIL_FROM}>`,
-      to: options.to,
-      subject: options.subject,
-      html: options.html,
-    });
+    if (isBrevoConfigured()) {
+      await sendBrevoEmail(options);
+    } else {
+      await transporter.sendMail({
+        attachments: options.attachments,
+        from: `"${env.EMAIL_FROM_NAME}" <${env.EMAIL_FROM}>`,
+        to: options.to,
+        subject: options.subject,
+        html: options.html,
+      });
+    }
     console.log(`Email sent to ${options.to}`);
   } catch (error) {
     console.error('Email sending failed:', error);
     throw new Error('Failed to send email');
   }
+};
+
+const sendBrevoEmail = async (options: EmailOptions): Promise<void> => {
+  const senderEmail = env.BREVO_FROM_EMAIL?.trim() || env.EMAIL_FROM;
+  const senderName = env.BREVO_FROM_NAME?.trim() || env.EMAIL_FROM_NAME;
+  const body: Record<string, unknown> = {
+    sender: {
+      name: senderName,
+      email: senderEmail,
+    },
+    to: [{ email: options.to }],
+    subject: options.subject,
+    htmlContent: options.html,
+  };
+  const attachments = await brevoAttachments(options.attachments);
+  if (attachments.length) {
+    body.attachment = attachments;
+  }
+  const response = await fetch(env.BREVO_API_URL, {
+    method: 'POST',
+    headers: {
+      accept: 'application/json',
+      'api-key': env.BREVO_API_KEY!.trim(),
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    const text = await response.text().catch(() => '');
+    throw new Error(`Brevo email failed (${response.status}): ${text.slice(0, 300)}`);
+  }
+};
+
+const brevoAttachments = async (
+  attachments: Mail.Attachment[] | undefined,
+): Promise<Array<{ name: string; content: string }>> => {
+  if (!attachments?.length) {
+    return [];
+  }
+  const converted: Array<{ name: string; content: string }> = [];
+  for (const attachment of attachments) {
+    const filename = attachment.filename?.toString() || 'attachment';
+    if (typeof attachment.content === 'string' || Buffer.isBuffer(attachment.content)) {
+      converted.push({
+        name: filename,
+        content: Buffer.from(attachment.content).toString('base64'),
+      });
+      continue;
+    }
+    if (typeof attachment.path === 'string' && attachment.path.trim()) {
+      converted.push({
+        name: filename,
+        content: (await readFile(attachment.path)).toString('base64'),
+      });
+    }
+  }
+  return converted;
 };
 
 const getBrandLogoPath = (): string | null => {
