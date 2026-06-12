@@ -20,6 +20,14 @@ const optionalUrl = z.preprocess(
   z.string().url().optional(),
 );
 
+const booleanFromEnv = z.preprocess((value) => {
+  if (typeof value !== "string") return value;
+  const normalized = value.trim().toLowerCase();
+  if (["true", "1", "yes", "on"].includes(normalized)) return true;
+  if (["false", "0", "no", "off", ""].includes(normalized)) return false;
+  return value;
+}, z.boolean());
+
 const envSchema = z
   .object({
     // Server
@@ -67,13 +75,13 @@ const envSchema = z
       .default("https://api.brevo.com/v3/smtp/email"),
     BREVO_FROM_EMAIL: optionalString,
     BREVO_FROM_NAME: optionalString,
-    DEV_FIXED_OTP_ENABLED: z.coerce.boolean().default(false),
+    DEV_FIXED_OTP_ENABLED: booleanFromEnv.default(false),
     DEV_FIXED_OTP_CODE: z
       .string()
       .regex(/^\d{4}$/)
       .optional(),
     DEV_FIXED_OTP_ALLOWED_EMAILS: optionalString,
-    TESTING_RELAX_AUTH_LIMITS: z.coerce.boolean().default(false),
+    TESTING_RELAX_AUTH_LIMITS: booleanFromEnv.default(false),
 
     // Cloudinary
     CLOUDINARY_CLOUD_NAME: optionalString,
@@ -120,7 +128,7 @@ const envSchema = z
     CRON_SECRET: z.string().default("dev-cron-secret-change-me"),
 
     // Google Cloud Billing verification for AI spend. Service account JSON stays on the server only.
-    GOOGLE_BILLING_SYNC_ENABLED: z.coerce.boolean().default(false),
+    GOOGLE_BILLING_SYNC_ENABLED: booleanFromEnv.default(false),
     GOOGLE_BILLING_PROJECT_ID: z.string().default("softlogic-496310"),
     GOOGLE_BILLING_TABLE_PROJECT_ID: optionalString,
     GOOGLE_BILLING_DATASET_ID: optionalString,
@@ -161,7 +169,7 @@ const envSchema = z
     RATE_LIMIT_MAX_REQUESTS: z.coerce.number().default(100),
 
     // Profanity
-    PROFANITY_ENABLED: z.coerce.boolean().default(true),
+    PROFANITY_ENABLED: booleanFromEnv.default(true),
   })
   .superRefine((value, ctx) => {
     if (value.NODE_ENV === "production" && value.DEV_FIXED_OTP_ENABLED) {

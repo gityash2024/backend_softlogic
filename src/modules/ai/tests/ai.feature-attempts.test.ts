@@ -1,6 +1,9 @@
 import { AiFeatureUsageAttemptStatus, UserRole } from '@prisma/client';
 
 jest.mock('@/config', () => ({
+  env: {
+    NODE_ENV: 'test',
+  },
   prisma: {
     $transaction: jest.fn(),
     aiFeatureUsageAttempt: {
@@ -63,14 +66,14 @@ describe('AI feature attempt limits', () => {
       aiService.reserveFeatureAttempt(actor, { featureKey: 'text_to_media' }),
     ).resolves.toMatchObject({
       attemptId: 'attempt-1',
-      limit: 2,
+      limit: 3,
       usedInWindow: 2,
-      remainingInWindow: 0,
+      remainingInWindow: 1,
     });
   });
 
-  it('blocks text-to-media when two attempts already exist inside 24 hours', async () => {
-    mockedPrisma.aiFeatureUsageAttempt.count.mockResolvedValue(2);
+  it('blocks text-to-media when three attempts already exist inside 24 hours', async () => {
+    mockedPrisma.aiFeatureUsageAttempt.count.mockResolvedValue(3);
 
     await expect(
       aiService.reserveFeatureAttempt(actor, { featureKey: 'text_to_media' }),
@@ -107,7 +110,7 @@ describe('AI feature attempt limits', () => {
       attemptId: 'attempt-1',
       status: AiFeatureUsageAttemptStatus.FAILED,
       usedInWindow: 0,
-      remainingInWindow: 2,
+      remainingInWindow: 3,
     });
   });
 });

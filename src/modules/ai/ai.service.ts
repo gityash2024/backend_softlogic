@@ -36,7 +36,7 @@ const MASTER_ACCOUNT_ID = 'master';
 const MASTER_CONFIG_ID = 'master';
 const GEMINI_API_BASE = 'https://generativelanguage.googleapis.com/v1beta';
 const TEXT_TO_MEDIA_FEATURE = 'text_to_media';
-const TEXT_TO_MEDIA_LIMIT = 2;
+const TEXT_TO_MEDIA_LIMIT = 3;
 const TEXT_TO_MEDIA_WINDOW_MS = 24 * 60 * 60 * 1000;
 const AI_USER_ROLES = new Set<UserRole>([
   UserRole.SUPER_ADMIN,
@@ -376,7 +376,7 @@ class AiService {
       });
       if (used >= TEXT_TO_MEDIA_LIMIT) {
         throw new AppError(
-          'Text to Media limit reached. You can generate 2 AI images every 24 hours. Use Browser Images or Gemini in the embedded browser meanwhile.',
+          'Text to Media limit reached. You can generate 3 AI images every 24 hours. Use Browser Images or Gemini in the embedded browser meanwhile.',
           429,
         );
       }
