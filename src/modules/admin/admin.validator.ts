@@ -8,6 +8,7 @@ import {
   OrganizationStorageStatus,
   PaymentProvider,
   PaymentProviderMode,
+  StorageCredentialScope,
   SubscriptionStatus,
   UserRole,
   UserStatus,
@@ -27,9 +28,26 @@ const optionalDate = z.preprocess((value) => {
 }, z.coerce.date().optional());
 
 const optionalUserLimit = z.coerce.number().int().min(0).optional().nullable();
+const userModuleRoleSchema = z.enum([
+  UserRole.TEACHER,
+  UserRole.STUDENT,
+  UserRole.PARENT,
+] as const);
 
 // White-label brand colors accept #rgb or #rrggbb hex.
 const HEX_COLOR_RE = /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/;
+const optionalNullableTrimmedString = (schema: z.ZodString) =>
+  z.preprocess((value) => {
+    if (typeof value !== 'string') return value;
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : null;
+  }, schema.optional().nullable());
+const optionalNullableEmail = optionalNullableTrimmedString(z.string().email());
+const optionalNullablePhone = optionalNullableTrimmedString(z.string().min(3).max(40));
+const optionalNullableBrandName = optionalNullableTrimmedString(z.string().min(1).max(120));
+const optionalNullableHexColor = optionalNullableTrimmedString(
+  z.string().regex(HEX_COLOR_RE, 'Enter a valid hex color'),
+);
 
 const listQueryBase = z.object({
   page: z.coerce.number().int().positive().default(1),
@@ -57,15 +75,15 @@ export const createOrganizationSchema = z.object({
   teacherUserLimit: optionalUserLimit,
   studentUserLimit: optionalUserLimit,
   parentUserLimit: optionalUserLimit,
-  supportEmail: z.string().email().optional().nullable(),
-  supportPhone: z.string().min(3).max(40).optional().nullable(),
+  supportEmail: optionalNullableEmail,
+  supportPhone: optionalNullablePhone,
   storageProviders: z.array(z.nativeEnum(OrganizationStorageProvider)).optional(),
   defaultStorageProvider: z.nativeEnum(OrganizationStorageProvider).optional().nullable(),
   storageProvider: z.nativeEnum(OrganizationStorageProvider).optional().nullable(),
   storageStatus: z.nativeEnum(OrganizationStorageStatus).optional(),
-  brandName: z.string().trim().min(1).max(120).optional().nullable(),
-  brandPrimaryColor: z.string().trim().regex(HEX_COLOR_RE, 'Enter a valid hex color').optional().nullable(),
-  brandAccentColor: z.string().trim().regex(HEX_COLOR_RE, 'Enter a valid hex color').optional().nullable(),
+  brandName: optionalNullableBrandName,
+  brandPrimaryColor: optionalNullableHexColor,
+  brandAccentColor: optionalNullableHexColor,
 });
 
 export const updateOrganizationSchema = z.object({
@@ -81,15 +99,15 @@ export const updateOrganizationSchema = z.object({
   teacherUserLimit: optionalUserLimit,
   studentUserLimit: optionalUserLimit,
   parentUserLimit: optionalUserLimit,
-  supportEmail: z.string().email().optional().nullable(),
-  supportPhone: z.string().min(3).max(40).optional().nullable(),
+  supportEmail: optionalNullableEmail,
+  supportPhone: optionalNullablePhone,
   storageProviders: z.array(z.nativeEnum(OrganizationStorageProvider)).optional(),
   defaultStorageProvider: z.nativeEnum(OrganizationStorageProvider).optional().nullable(),
   storageProvider: z.nativeEnum(OrganizationStorageProvider).optional().nullable(),
   storageStatus: z.nativeEnum(OrganizationStorageStatus).optional(),
-  brandName: z.string().trim().min(1).max(120).optional().nullable(),
-  brandPrimaryColor: z.string().trim().regex(HEX_COLOR_RE, 'Enter a valid hex color').optional().nullable(),
-  brandAccentColor: z.string().trim().regex(HEX_COLOR_RE, 'Enter a valid hex color').optional().nullable(),
+  brandName: optionalNullableBrandName,
+  brandPrimaryColor: optionalNullableHexColor,
+  brandAccentColor: optionalNullableHexColor,
 }).refine((value) => Object.keys(value).length > 0, {
   message: 'At least one field is required',
 });
@@ -97,7 +115,7 @@ export const updateOrganizationSchema = z.object({
 export const createUserSchema = z.object({
   email: z.string().email(),
   name: z.string().min(2).max(120).optional(),
-  role: z.nativeEnum(UserRole),
+  role: userModuleRoleSchema,
   status: z.nativeEnum(UserStatus).optional(),
   organizationId: z.string().uuid().optional().nullable(),
   timezone: z.string().min(2).optional(),
@@ -107,7 +125,7 @@ export const createUserSchema = z.object({
 
 export const updateUserSchema = z.object({
   name: z.string().min(2).max(120).optional(),
-  role: z.nativeEnum(UserRole).optional(),
+  role: userModuleRoleSchema.optional(),
   status: z.nativeEnum(UserStatus).optional(),
   organizationId: z.string().uuid().optional().nullable(),
   timezone: z.string().min(2).optional(),
@@ -123,7 +141,7 @@ export const bulkInviteSchema = z.object({
       z.object({
         email: z.string().email(),
         name: z.string().min(2).max(120).optional().nullable(),
-        role: z.nativeEnum(UserRole),
+        role: userModuleRoleSchema,
         organizationId: z.string().uuid().optional().nullable(),
       }),
     )
@@ -351,6 +369,24 @@ export const upsertOrganizationStorageSchema = z.object({
   rootFolderId: z.string().trim().max(300).optional().nullable(),
   encryptedTokens: z.string().trim().optional().nullable(),
   lastError: z.string().trim().max(500).optional().nullable(),
+});
+
+export const listStorageCredentialsQuerySchema = z.object({
+  scope: z.nativeEnum(StorageCredentialScope),
+  organizationId: z.string().uuid().optional().nullable(),
+});
+
+export const upsertStorageCredentialSchema = z.object({
+  scope: z.nativeEnum(StorageCredentialScope),
+  organizationId: z.string().uuid().optional().nullable(),
+  clientId: z.string().trim().min(1).max(500).optional().nullable(),
+  clientSecret: z.string().trim().min(1).max(1000).optional().nullable(),
+  redirectUri: z.string().trim().url().max(1000).optional().nullable(),
+});
+
+export const deleteStorageCredentialQuerySchema = z.object({
+  scope: z.nativeEnum(StorageCredentialScope),
+  organizationId: z.string().uuid().optional().nullable(),
 });
 
 export type ExportQuery = z.infer<typeof exportQuerySchema>;

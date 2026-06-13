@@ -134,6 +134,7 @@ model Organization {
   liveSessions                 LiveSession[]
   parentStudentLinks           ParentStudentLink[]
   storageConnections           OrganizationStorageConnection[]
+  storageCredentialConfigs     StorageCredentialConfig[]
   aiCreditAccounts             AiCreditAccount[]
   hardwareActivationKeys       HardwareActivationKey[]
   hardwareActivations          HardwareActivation[]
@@ -178,6 +179,11 @@ enum OrganizationStorageStatus {
   PENDING
   CONNECTED
   INVALID
+}
+
+enum StorageCredentialScope {
+  GLOBAL
+  ORGANIZATION
 }
 
 model OrganizationMembership {
@@ -520,6 +526,24 @@ model OrganizationStorageConnection {
   @@unique([organizationId, provider])
   @@index([status])
   @@map("organization_storage_connections")
+}
+
+model StorageCredentialConfig {
+  id                   String                      @id @default(uuid())
+  provider             OrganizationStorageProvider
+  scope                StorageCredentialScope
+  organizationId       String?
+  encryptedCredentials String
+  configuredById       String?
+  createdAt            DateTime                    @default(now())
+  updatedAt            DateTime                    @updatedAt
+
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, scope, organizationId])
+  @@index([scope])
+  @@index([organizationId])
+  @@map("storage_credential_configs")
 }
 
 model PaymentProviderConfig {

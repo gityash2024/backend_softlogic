@@ -58,6 +58,9 @@ export interface OrganizationSummary {
   parentLoginEnabled: boolean;
   sessionOnlyJoinEnabled: boolean;
   teacherOnlyMode: boolean;
+  teacherUserLimit: number | null;
+  studentUserLimit: number | null;
+  parentUserLimit: number | null;
   supportEmail: string | null;
   supportPhone: string | null;
   storageProviders: OrganizationStorageProvider[];
@@ -199,6 +202,9 @@ const toOrganizationSummary = (organization: Organization): OrganizationSummary 
   parentLoginEnabled: organization.parentLoginEnabled,
   sessionOnlyJoinEnabled: organization.sessionOnlyJoinEnabled,
   teacherOnlyMode: organization.teacherOnlyMode,
+  teacherUserLimit: organization.teacherUserLimit ?? null,
+  studentUserLimit: organization.studentUserLimit ?? null,
+  parentUserLimit: organization.parentUserLimit ?? null,
   supportEmail: organization.supportEmail ?? null,
   supportPhone: organization.supportPhone ?? null,
   storageProviders:

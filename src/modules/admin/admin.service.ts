@@ -16,6 +16,7 @@ import {
   PaymentProviderMode,
   OrganizationStatus,
   Prisma,
+  StorageCredentialScope,
   SubscriptionStatus,
   UserRole,
   UserStatus,
@@ -33,8 +34,10 @@ import { AppError } from '@/shared/errors/AppError';
 import { findUserContextById } from '@/modules/users/user-context.service';
 import { licensingService } from '@/modules/licensing/licensing.service';
 import { authRepository } from '@/modules/auth/auth.repository';
+import { decryptJson, encryptJson } from '@/modules/integrations/integrations.service';
 import { deleteImageAsset, uploadImageBuffer } from '@/shared/services/cloudinary.service';
 import {
+  type EmailBrand,
   sendPasswordSetupEmail,
   sendSessionsRevokedEmail,
   sendSubscriptionApprovedEmail,
@@ -104,12 +107,27 @@ interface UpdateOrganizationInput {
   brandAccentColor?: string | null;
 }
 
+interface StorageCredentialInput {
+  scope: StorageCredentialScope;
+  organizationId?: string | null;
+  clientId?: string | null;
+  clientSecret?: string | null;
+  redirectUri?: string | null;
+}
+
+interface StorageCredentialPayload extends Record<string, unknown> {
+  clientId: string;
+  clientSecret: string;
+  redirectUri?: string;
+}
+
 type PasswordSetupEmailPayload = {
   to: string;
   name: string | null;
   role: UserRole;
   organizationName?: string | null;
   setupUrl: string;
+  brand?: EmailBrand;
 };
 
 interface CreateUserInput {
@@ -210,6 +228,12 @@ const ADMIN_ROLES = [
   UserRole.PARTNER_ADMIN,
   UserRole.CUSTOMER_ADMIN,
   UserRole.ADMIN,
+] as const;
+
+const USER_MODULE_ROLES = [
+  UserRole.TEACHER,
+  UserRole.STUDENT,
+  UserRole.PARENT,
 ] as const;
 
 const ROLE_LABEL: Record<UserRole, string> = {
@@ -338,6 +362,46 @@ const primaryAdminRoleForOrganization = (
   if (kind === OrganizationKind.PARTNER) return UserRole.PARTNER_ADMIN;
   if (kind === OrganizationKind.INTERNAL) return UserRole.ADMIN;
   return UserRole.CUSTOMER_ADMIN;
+};
+
+const emailBrandForOrganization = (
+  organization: { brandingMode: BrandingMode } | null | undefined,
+): EmailBrand =>
+  organization?.brandingMode === BrandingMode.WHITE_LABEL
+    ? 'AI_SMART_BOARD'
+    : 'SOFTLOGIC';
+
+const isUserModuleRole = (role: UserRole): boolean =>
+  USER_MODULE_ROLES.includes(role as (typeof USER_MODULE_ROLES)[number]);
+
+const assertPartnerCustomerPolicyWithinGrant = (
+  requested: OrganizationRolePolicy,
+  partner: OrganizationRolePolicy,
+): void => {
+  if (requested.studentLoginEnabled && !partner.studentLoginEnabled) {
+    throw new AppError('Partner organization does not allow student dashboard login', 403);
+  }
+  if (requested.parentLoginEnabled && !partner.parentLoginEnabled) {
+    throw new AppError('Partner organization does not allow parent dashboard login', 403);
+  }
+  const checks: Array<{
+    label: string;
+    requested: number | null;
+    allowed: number | null;
+  }> = [
+    { label: 'Teacher users', requested: requested.teacherUserLimit, allowed: partner.teacherUserLimit },
+    { label: 'Student users', requested: requested.studentUserLimit, allowed: partner.studentUserLimit },
+    { label: 'Parent users', requested: requested.parentUserLimit, allowed: partner.parentUserLimit },
+  ];
+  for (const check of checks) {
+    if (
+      check.allowed !== null &&
+      check.requested !== null &&
+      check.requested > check.allowed
+    ) {
+      throw new AppError(`${check.label} cannot exceed partner organization limit`, 403);
+    }
+  }
 };
 
 const isAdminOnboardingRole = (role: UserRole): boolean =>
@@ -921,14 +985,35 @@ export class AdminService {
     if (parentOrganizationId) {
       await ensureOrganizationManaged(parentOrganizationId, actor);
     }
+    const partnerPolicy =
+      actor.role === UserRole.PARTNER_ADMIN && parentOrganizationId
+        ? await prisma.organization.findFirst({
+            where: { id: parentOrganizationId, deletedAt: null },
+            select: {
+              brandingMode: true,
+              brandName: true,
+              brandPrimaryColor: true,
+              brandAccentColor: true,
+              logoUrl: true,
+              studentLoginEnabled: true,
+              parentLoginEnabled: true,
+              teacherOnlyMode: true,
+              teacherUserLimit: true,
+              studentUserLimit: true,
+              parentUserLimit: true,
+            },
+          })
+        : null;
 
     const supportEmail = normalizeEmail(input.supportEmail);
     if (supportEmail) {
       await this.ensureSupportEmailAvailable(supportEmail);
     }
     const storage = this.resolveStorageSelection(input);
+    const canConfigureRolePolicy =
+      actor.role === UserRole.SUPER_ADMIN || actor.role === UserRole.PARTNER_ADMIN;
     const rolePolicy = resolveOrganizationRolePolicy(
-      actor.role === UserRole.SUPER_ADMIN
+      canConfigureRolePolicy
         ? {
             studentLoginEnabled: input.studentLoginEnabled ?? false,
             parentLoginEnabled: input.parentLoginEnabled ?? false,
@@ -939,6 +1024,12 @@ export class AdminService {
           }
         : {},
     );
+    if (actor.role === UserRole.PARTNER_ADMIN) {
+      if (!partnerPolicy) {
+        throw new AppError('Partner organization policy could not be resolved', 400);
+      }
+      assertPartnerCustomerPolicyWithinGrant(rolePolicy, partnerPolicy);
+    }
 
     const setupEmails: PasswordSetupEmailPayload[] = [];
 
@@ -949,30 +1040,51 @@ export class AdminService {
           slug: input.slug ? slugify(input.slug) : slugify(input.name),
           kind,
           parentOrganizationId,
-          brandingMode: actor.role === UserRole.SUPER_ADMIN
-            ? input.brandingMode ?? BrandingMode.SOFTLOGIC
-            : BrandingMode.SOFTLOGIC,
-          // Brand identity is a Super-Admin-only commercial control. createOrganization
-          // has no commercialKeys guard, so gate these inline just like brandingMode.
-          brandName: actor.role === UserRole.SUPER_ADMIN ? input.brandName ?? null : null,
+          brandingMode:
+            actor.role === UserRole.SUPER_ADMIN
+              ? input.brandingMode ?? BrandingMode.SOFTLOGIC
+              : actor.role === UserRole.PARTNER_ADMIN && partnerPolicy
+                ? partnerPolicy.brandingMode
+                : BrandingMode.SOFTLOGIC,
+          // Brand identity is a Super-Admin-only commercial control. Partner
+          // child organizations inherit a snapshot from the partner at create.
+          brandName:
+            actor.role === UserRole.SUPER_ADMIN
+              ? input.brandName ?? null
+              : actor.role === UserRole.PARTNER_ADMIN && partnerPolicy
+                ? partnerPolicy.brandName
+                : null,
           brandPrimaryColor:
-            actor.role === UserRole.SUPER_ADMIN ? input.brandPrimaryColor ?? null : null,
+            actor.role === UserRole.SUPER_ADMIN
+              ? input.brandPrimaryColor ?? null
+              : actor.role === UserRole.PARTNER_ADMIN && partnerPolicy
+                ? partnerPolicy.brandPrimaryColor
+                : null,
           brandAccentColor:
-            actor.role === UserRole.SUPER_ADMIN ? input.brandAccentColor ?? null : null,
+            actor.role === UserRole.SUPER_ADMIN
+              ? input.brandAccentColor ?? null
+              : actor.role === UserRole.PARTNER_ADMIN && partnerPolicy
+                ? partnerPolicy.brandAccentColor
+                : null,
+          logoUrl:
+            actor.role === UserRole.PARTNER_ADMIN && partnerPolicy
+              ? partnerPolicy.logoUrl
+              : undefined,
+          logoPublicId: actor.role === UserRole.PARTNER_ADMIN ? null : undefined,
           studentLoginEnabled:
-            actor.role === UserRole.SUPER_ADMIN ? rolePolicy.studentLoginEnabled : false,
+            canConfigureRolePolicy ? rolePolicy.studentLoginEnabled : false,
           parentLoginEnabled:
-            actor.role === UserRole.SUPER_ADMIN ? rolePolicy.parentLoginEnabled : false,
+            canConfigureRolePolicy ? rolePolicy.parentLoginEnabled : false,
           sessionOnlyJoinEnabled:
-            actor.role === UserRole.SUPER_ADMIN ? input.sessionOnlyJoinEnabled ?? true : true,
+            canConfigureRolePolicy ? input.sessionOnlyJoinEnabled ?? true : true,
           teacherOnlyMode:
-            actor.role === UserRole.SUPER_ADMIN ? rolePolicy.teacherOnlyMode : false,
+            canConfigureRolePolicy ? rolePolicy.teacherOnlyMode : false,
           teacherUserLimit:
-            actor.role === UserRole.SUPER_ADMIN ? rolePolicy.teacherUserLimit : null,
+            canConfigureRolePolicy ? rolePolicy.teacherUserLimit : null,
           studentUserLimit:
-            actor.role === UserRole.SUPER_ADMIN ? rolePolicy.studentUserLimit : null,
+            canConfigureRolePolicy ? rolePolicy.studentUserLimit : null,
           parentUserLimit:
-            actor.role === UserRole.SUPER_ADMIN ? rolePolicy.parentUserLimit : null,
+            canConfigureRolePolicy ? rolePolicy.parentUserLimit : null,
           supportEmail,
           supportPhone: input.supportPhone,
           storageProviders: storage.providers,
@@ -1028,6 +1140,7 @@ export class AdminService {
           role: primaryAdmin.role,
           organizationName: createdOrganization.name,
           setupUrl: this.passwordSetupUrl(setupToken),
+          brand: emailBrandForOrganization(createdOrganization),
         });
       }
 
@@ -1050,6 +1163,7 @@ export class AdminService {
           organizationName: setupEmail.organizationName,
           setupUrl: setupEmail.setupUrl,
           expiresInLabel: `${PASSWORD_SETUP_EXPIRY_DAYS} days`,
+          brand: setupEmail.brand,
         })
       : null;
 
@@ -1083,6 +1197,7 @@ export class AdminService {
         settings: true,
         supportEmail: true,
         primaryAdminUserId: true,
+        brandingMode: true,
         storageProvider: true,
         storageProviders: true,
         studentLoginEnabled: true,
@@ -1250,6 +1365,9 @@ export class AdminService {
             role: primaryAdmin.role,
             organizationName: input.name ?? existing.name,
             setupUrl: this.passwordSetupUrl(setupToken),
+            brand: emailBrandForOrganization({
+              brandingMode: input.brandingMode ?? existing.brandingMode,
+            }),
           });
         } else {
           const primaryAdmin = await tx.user.create({
@@ -1278,6 +1396,9 @@ export class AdminService {
             role: primaryAdmin.role,
             organizationName: input.name ?? existing.name,
             setupUrl: this.passwordSetupUrl(setupToken),
+            brand: emailBrandForOrganization({
+              brandingMode: input.brandingMode ?? existing.brandingMode,
+            }),
           });
         }
         data.primaryAdminUser = primaryAdminUserId
@@ -1311,6 +1432,7 @@ export class AdminService {
           organizationName: setupEmail.organizationName,
           setupUrl: setupEmail.setupUrl,
           expiresInLabel: `${PASSWORD_SETUP_EXPIRY_DAYS} days`,
+          brand: setupEmail.brand,
         })
       : null;
 
@@ -1817,6 +1939,9 @@ export class AdminService {
   }
 
   async createUser(actor: AuthenticatedUserLike, input: CreateUserInput) {
+    if (!isUserModuleRole(input.role)) {
+      throw new AppError('Users module can only create teacher, student, and parent accounts', 400);
+    }
     if (!canManageRole(actor.role, input.role)) {
       throw new AppError('You do not have permission to assign this role', 403);
     }
@@ -1878,7 +2003,7 @@ export class AdminService {
       const organization = organizationId
         ? await tx.organization.findUnique({
             where: { id: organizationId },
-            select: { name: true },
+            select: { name: true, brandingMode: true },
           })
         : null;
       setupEmails.push({
@@ -1887,6 +2012,7 @@ export class AdminService {
         role: createdUser.role,
         organizationName: organization?.name,
         setupUrl: this.passwordSetupUrl(setupToken),
+        brand: emailBrandForOrganization(organization),
       });
 
       return createdUser;
@@ -1906,6 +2032,7 @@ export class AdminService {
         organizationName: setupEmail.organizationName,
         setupUrl: setupEmail.setupUrl,
         expiresInLabel: `${PASSWORD_SETUP_EXPIRY_DAYS} days`,
+        brand: setupEmail.brand,
       });
       if (!setupEmailSent) {
         await this.logAudit(
@@ -1933,8 +2060,13 @@ export class AdminService {
       throw new AppError('User not found', 404);
     }
 
-    if (input.role && !canManageRole(actor.role, input.role)) {
-      throw new AppError('You do not have permission to assign this role', 403);
+    if (input.role) {
+      if (!isUserModuleRole(input.role)) {
+        throw new AppError('Users module can only assign teacher, student, and parent roles', 400);
+      }
+      if (!canManageRole(actor.role, input.role)) {
+        throw new AppError('You do not have permission to assign this role', 403);
+      }
     }
 
     if (!canManageRole(actor.role, existing.role) && actor.role !== 'SUPER_ADMIN' && existing.id !== actor.userId) {
@@ -2175,7 +2307,7 @@ export class AdminService {
     const organization = user.primaryOrganizationId
       ? await prisma.organization.findUnique({
           where: { id: user.primaryOrganizationId },
-          select: { name: true },
+          select: { name: true, brandingMode: true },
         })
       : null;
 
@@ -2186,6 +2318,7 @@ export class AdminService {
       organizationName: organization?.name,
       setupUrl: this.passwordSetupUrl(setupToken),
       expiresInLabel: `${PASSWORD_SETUP_EXPIRY_DAYS} days`,
+      brand: emailBrandForOrganization(organization),
     });
 
     await this.logAudit(
@@ -2205,7 +2338,17 @@ export class AdminService {
     await authRepository.deleteAllUserSessions(user.id);
 
     try {
-      await sendSessionsRevokedEmail({ to: user.email, name: user.name });
+      const organization = user.primaryOrganizationId
+        ? await prisma.organization.findUnique({
+            where: { id: user.primaryOrganizationId },
+            select: { brandingMode: true },
+          })
+        : null;
+      await sendSessionsRevokedEmail({
+        to: user.email,
+        name: user.name,
+        brand: emailBrandForOrganization(organization),
+      });
     } catch (error) {
       console.error(`Sessions revoked email failed for ${user.email}:`, error);
     }
@@ -3018,6 +3161,173 @@ export class AdminService {
     });
     await this.logAudit(actor.userId, 'organization.storage.upsert', 'organization', organizationId, `Updated ${input.provider} storage connection`);
     return connection;
+  }
+
+  private assertStorageCredentialScope(
+    actor: AuthenticatedUserLike,
+    scope: StorageCredentialScope,
+    organizationId?: string | null,
+  ) {
+    if (scope === StorageCredentialScope.GLOBAL && actor.role !== UserRole.SUPER_ADMIN) {
+      throw new AppError('Only Super Admin can manage global storage credentials', 403);
+    }
+    if (scope === StorageCredentialScope.ORGANIZATION && !organizationId) {
+      throw new AppError('organizationId is required for organization credentials', 400);
+    }
+  }
+
+  private sanitizeStorageCredential(
+    record: {
+      id: string;
+      provider: OrganizationStorageProvider;
+      scope: StorageCredentialScope;
+      organizationId: string | null;
+      encryptedCredentials: string;
+      configuredById: string | null;
+      createdAt: Date;
+      updatedAt: Date;
+    },
+  ) {
+    let payload: StorageCredentialPayload | null = null;
+    try {
+      payload = decryptJson<StorageCredentialPayload>(record.encryptedCredentials);
+    } catch {
+      payload = null;
+    }
+    const clientId = payload?.clientId?.trim() ?? '';
+    return {
+      id: record.id,
+      provider: record.provider,
+      scope: record.scope,
+      organizationId: record.organizationId,
+      configured: Boolean(payload?.clientId && payload?.clientSecret),
+      clientIdPreview: clientId
+        ? `${clientId.slice(0, 4)}...${clientId.slice(-4)}`
+        : null,
+      redirectUri: payload?.redirectUri ?? null,
+      configuredById: record.configuredById,
+      createdAt: record.createdAt,
+      updatedAt: record.updatedAt,
+    };
+  }
+
+  async listStorageCredentials(
+    actor: AuthenticatedUserLike,
+    input: { scope: StorageCredentialScope; organizationId?: string | null },
+  ) {
+    this.assertStorageCredentialScope(actor, input.scope, input.organizationId);
+    if (input.scope === StorageCredentialScope.ORGANIZATION && input.organizationId) {
+      await ensureOrganizationManaged(input.organizationId, actor);
+    }
+
+    const records = await prisma.storageCredentialConfig.findMany({
+      where: {
+        scope: input.scope,
+        organizationId:
+          input.scope === StorageCredentialScope.GLOBAL
+            ? null
+            : input.organizationId ?? undefined,
+      },
+      orderBy: { updatedAt: 'desc' },
+    });
+    return records.map((record) => this.sanitizeStorageCredential(record));
+  }
+
+  async upsertStorageCredential(
+    actor: AuthenticatedUserLike,
+    provider: OrganizationStorageProvider,
+    input: StorageCredentialInput,
+  ) {
+    this.assertStorageCredentialScope(actor, input.scope, input.organizationId);
+    const organizationId =
+      input.scope === StorageCredentialScope.ORGANIZATION
+        ? input.organizationId ?? null
+        : null;
+    if (organizationId) {
+      await ensureOrganizationManaged(organizationId, actor);
+    }
+
+    const existing = await prisma.storageCredentialConfig.findFirst({
+      where: {
+        provider,
+        scope: input.scope,
+        organizationId,
+      },
+      orderBy: { updatedAt: 'desc' },
+    });
+    const existingPayload = existing
+      ? decryptJson<StorageCredentialPayload>(existing.encryptedCredentials)
+      : null;
+    const clientId = input.clientId?.trim() || existingPayload?.clientId;
+    const clientSecret = input.clientSecret?.trim() || existingPayload?.clientSecret;
+    if (!clientId) {
+      throw new AppError('Client ID is required', 400);
+    }
+    if (!clientSecret) {
+      throw new AppError('Client secret is required', 400);
+    }
+    const redirectUri = input.redirectUri?.trim();
+    const encryptedCredentials = encryptJson({
+      clientId,
+      clientSecret,
+      ...(redirectUri ? { redirectUri } : {}),
+    });
+    const saved = existing
+      ? await prisma.storageCredentialConfig.update({
+          where: { id: existing.id },
+          data: {
+            encryptedCredentials,
+            configuredById: actor.userId,
+          },
+        })
+      : await prisma.storageCredentialConfig.create({
+          data: {
+            provider,
+            scope: input.scope,
+            organizationId,
+            encryptedCredentials,
+            configuredById: actor.userId,
+          },
+        });
+
+    await this.logAudit(
+      actor.userId,
+      'storage.credentials.upsert',
+      input.scope === StorageCredentialScope.GLOBAL ? 'platform' : 'organization',
+      organizationId ?? 'global',
+      `Updated ${provider} ${input.scope.toLowerCase()} storage credentials`,
+    );
+    return this.sanitizeStorageCredential(saved);
+  }
+
+  async deleteStorageCredential(
+    actor: AuthenticatedUserLike,
+    provider: OrganizationStorageProvider,
+    input: { scope: StorageCredentialScope; organizationId?: string | null },
+  ) {
+    this.assertStorageCredentialScope(actor, input.scope, input.organizationId);
+    const organizationId =
+      input.scope === StorageCredentialScope.ORGANIZATION
+        ? input.organizationId ?? null
+        : null;
+    if (organizationId) {
+      await ensureOrganizationManaged(organizationId, actor);
+    }
+    await prisma.storageCredentialConfig.deleteMany({
+      where: {
+        provider,
+        scope: input.scope,
+        organizationId,
+      },
+    });
+    await this.logAudit(
+      actor.userId,
+      'storage.credentials.delete',
+      input.scope === StorageCredentialScope.GLOBAL ? 'platform' : 'organization',
+      organizationId ?? 'global',
+      `Deleted ${provider} ${input.scope.toLowerCase()} storage credentials`,
+    );
+    return { deleted: true };
   }
 
   async listActivity(

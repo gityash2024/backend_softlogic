@@ -2,7 +2,8 @@ import type { RequestHandler } from 'express';
 import rateLimit from 'express-rate-limit';
 import { env } from '@/config';
 
-const shouldRelaxAuthLimits = env.TESTING_RELAX_AUTH_LIMITS;
+const shouldRelaxAuthLimits =
+  env.NODE_ENV === 'development' || env.TESTING_RELAX_AUTH_LIMITS;
 const passthroughRateLimiter: RequestHandler = (_req, _res, next) => next();
 
 export const globalRateLimiter = shouldRelaxAuthLimits

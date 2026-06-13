@@ -295,6 +295,13 @@ export class LiveSessionService {
       where: { email },
       select: { id: true },
     });
+    const organization = liveSession.organizationId
+      ? await prisma.organization.findUnique({
+          where: { id: liveSession.organizationId },
+          select: { name: true, studentLoginEnabled: true, brandingMode: true },
+        })
+      : null;
+    const brand = organization?.brandingMode === "WHITE_LABEL" ? "AI_SMART_BOARD" : "SOFTLOGIC";
 
     const invitedUser = await prisma.user.upsert({
       where: { email },
@@ -313,15 +320,10 @@ export class LiveSessionService {
     });
 
     if (!existingInvitedUser) {
-      const organization = liveSession.organizationId
-        ? await prisma.organization.findUnique({
-            where: { id: liveSession.organizationId },
-            select: { name: true, studentLoginEnabled: true },
-          })
-        : null;
       if (organization?.studentLoginEnabled) {
         const setupToken = await this.createPasswordSetupToken(invitedUser.id);
         await sendPasswordSetupEmail({
+          brand,
           to: invitedUser.email,
           name: invitedUser.name,
           role: invitedUser.role,
@@ -331,6 +333,7 @@ export class LiveSessionService {
         });
       } else {
         await sendWelcomeEmail({
+          brand,
           to: invitedUser.email,
           name: invitedUser.name,
           role: invitedUser.role,
@@ -370,9 +373,11 @@ export class LiveSessionService {
     });
 
     await sendEmail({
+      brand,
       to: email,
       subject: `SoftLogic live session code: ${code}`,
       html: getLiveSessionInviteEmailHtml({
+        brand,
         code,
         teacherName: liveSession.createdBy.name ?? liveSession.createdBy.email,
         sessionTitle: liveSession.title ?? "Live Session",

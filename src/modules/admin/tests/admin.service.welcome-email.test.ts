@@ -74,10 +74,6 @@ describe('AdminService welcome email', () => {
   });
 
   it.each([
-    UserRole.SUPER_ADMIN,
-    UserRole.ADMIN,
-    UserRole.PARTNER_ADMIN,
-    UserRole.CUSTOMER_ADMIN,
     UserRole.TEACHER,
     UserRole.STUDENT,
     UserRole.PARENT,
@@ -112,5 +108,26 @@ describe('AdminService welcome email', () => {
         setupUrl: expect.stringContaining('/setup-password?token='),
       }),
     );
+  });
+
+  it.each([
+    UserRole.SUPER_ADMIN,
+    UserRole.ADMIN,
+    UserRole.PARTNER_ADMIN,
+    UserRole.CUSTOMER_ADMIN,
+  ])('rejects %s creation through the Users module', async (role) => {
+    await expect(
+      adminService.createUser(
+        { userId: 'admin-1', role: UserRole.SUPER_ADMIN },
+        {
+          email: `${role.toLowerCase()}@example.com`,
+          name: `${role} Demo`,
+          role,
+          status: UserStatus.DISABLED,
+        },
+      ),
+    ).rejects.toThrow('Users module can only create teacher, student, and parent accounts');
+
+    expect(sendPasswordSetupEmail).not.toHaveBeenCalled();
   });
 });

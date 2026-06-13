@@ -204,6 +204,35 @@ describe("AuthService fixed OTP allowlist", () => {
     expect(mockedVerifyOtpHash).not.toHaveBeenCalled();
   });
 
+  it("accepts 1234 for any active development email when the allowlist is empty", async () => {
+    env.DEV_FIXED_OTP_ALLOWED_EMAILS = "";
+
+    const result = await authService.verifyOtp(
+      "qa@softlogicwhiteboard.com",
+      "1234",
+      "127.0.0.1",
+    );
+
+    expect(result.tokens.accessToken).toBe("access-token");
+    expect(mockedAuthRepository.markOtpUsed).toHaveBeenCalledWith("otp-1");
+    expect(mockedVerifyOtpHash).not.toHaveBeenCalled();
+  });
+
+  it("keeps the generated real OTP path as a development fallback", async () => {
+    env.DEV_FIXED_OTP_ALLOWED_EMAILS = "";
+    mockedVerifyOtpHash.mockResolvedValue(true);
+
+    const result = await authService.verifyOtp(
+      "admin@softlogicwhiteboard.com",
+      "9876",
+      "127.0.0.1",
+    );
+
+    expect(result.tokens.accessToken).toBe("access-token");
+    expect(mockedVerifyOtpHash).toHaveBeenCalledWith("9876", "hashed-otp");
+    expect(mockedAuthRepository.markOtpUsed).toHaveBeenCalledWith("otp-1");
+  });
+
   it("rejects 1234 in production even when fixed OTP is enabled and allowlisted", async () => {
     env.NODE_ENV = "production";
 
@@ -216,6 +245,21 @@ describe("AuthService fixed OTP allowlist", () => {
       "otp-1",
     );
     expect(mockedAuthRepository.markOtpUsed).not.toHaveBeenCalled();
+  });
+
+  it("keeps real OTP verification working in production", async () => {
+    env.NODE_ENV = "production";
+    mockedVerifyOtpHash.mockResolvedValue(true);
+
+    const result = await authService.verifyOtp(
+      "admin@softlogicwhiteboard.com",
+      "9876",
+      "127.0.0.1",
+    );
+
+    expect(result.tokens.accessToken).toBe("access-token");
+    expect(mockedVerifyOtpHash).toHaveBeenCalledWith("9876", "hashed-otp");
+    expect(mockedAuthRepository.markOtpUsed).toHaveBeenCalledWith("otp-1");
   });
 
   it("replaces a revoked app client session during OTP login", async () => {
@@ -252,17 +296,17 @@ describe("AuthService fixed OTP allowlist", () => {
     expect(mockedAuthRepository.markOtpUsed).toHaveBeenCalledWith("otp-1");
   });
 
-  it("rejects 1234 for a non-allowlisted development email", async () => {
+  it("accepts 1234 for a non-allowlisted development email", async () => {
     env.DEV_FIXED_OTP_ALLOWED_EMAILS = "qa@softlogicwhiteboard.com";
 
-    await expect(
-      authService.verifyOtp("admin@softlogicwhiteboard.com", "1234"),
-    ).rejects.toThrow(AuthError.otpInvalid());
-
-    expect(mockedVerifyOtpHash).toHaveBeenCalledWith("1234", "hashed-otp");
-    expect(mockedAuthRepository.incrementOtpAttempts).toHaveBeenCalledWith(
-      "otp-1",
+    const result = await authService.verifyOtp(
+      "admin@softlogicwhiteboard.com",
+      "1234",
     );
+
+    expect(result.tokens.accessToken).toBe("access-token");
+    expect(mockedVerifyOtpHash).not.toHaveBeenCalled();
+    expect(mockedAuthRepository.incrementOtpAttempts).not.toHaveBeenCalled();
   });
 
   it("still requires an existing OTP record for allowlisted emails", async () => {
@@ -318,7 +362,7 @@ describe("AuthService fixed OTP allowlist", () => {
     );
   });
 
-  it("rejects 1234 for password reset when the email is not allowlisted", async () => {
+  it("accepts 1234 for password reset in development when the email is not allowlisted", async () => {
     env.DEV_FIXED_OTP_ALLOWED_EMAILS = "qa@softlogicwhiteboard.com";
     mockedAuthRepository.findLatestOtp.mockResolvedValue({
       ...activeOtp,
@@ -330,12 +374,10 @@ describe("AuthService fixed OTP allowlist", () => {
         "admin@softlogicwhiteboard.com",
         "1234",
       ),
-    ).rejects.toThrow(AuthError.otpInvalid());
+    ).resolves.toEqual({ message: "OTP verified successfully" });
 
-    expect(mockedVerifyOtpHash).toHaveBeenCalledWith("1234", "hashed-otp");
-    expect(mockedAuthRepository.incrementOtpAttempts).toHaveBeenCalledWith(
-      "otp-1",
-    );
+    expect(mockedVerifyOtpHash).not.toHaveBeenCalled();
+    expect(mockedAuthRepository.incrementOtpAttempts).not.toHaveBeenCalled();
   });
 
   it("still requires an active reset OTP record before accepting 1234", async () => {
@@ -363,7 +405,7 @@ describe("AuthService fixed OTP allowlist", () => {
     expect(mockedAuthRepository.invalidateUserOtps).toHaveBeenCalled();
     expect(mockedAuthRepository.createOtp).toHaveBeenCalled();
     expect(mockedHashOtp).toHaveBeenCalledWith("9876");
-    expect(mockedGetOtpEmailHtml).toHaveBeenCalledWith("9876");
+    expect(mockedGetOtpEmailHtml).toHaveBeenCalledWith("9876", "SOFTLOGIC");
   });
 
   it("sends the generated OTP in email content for allowlisted tester accounts", async () => {
@@ -374,7 +416,7 @@ describe("AuthService fixed OTP allowlist", () => {
     expect(mockedGenerateOtp).toHaveBeenCalledTimes(1);
     expect(mockedHashOtp).toHaveBeenCalledWith("9876");
     expect(mockedGetBrandLogoEmailAttachments).toHaveBeenCalled();
-    expect(mockedGetOtpEmailHtml).toHaveBeenCalledWith("9876");
+    expect(mockedGetOtpEmailHtml).toHaveBeenCalledWith("9876", "SOFTLOGIC");
     expect(mockedSendEmail).toHaveBeenCalledWith(
       expect.objectContaining({
         attachments: [

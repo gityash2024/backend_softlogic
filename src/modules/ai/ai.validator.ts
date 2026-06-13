@@ -1,6 +1,11 @@
 import { AiCreditScope } from '@prisma/client';
 import { z } from 'zod';
 
+const aiCreditSourceAccountIdSchema = z.union([
+  z.string().uuid(),
+  z.literal('master'),
+]).optional().nullable();
+
 export const aiConfigSchema = z.object({
   geminiApiKey: z.string().trim().optional().nullable(),
   geminiTextModel: z.string().trim().min(1).optional(),
@@ -42,7 +47,7 @@ export const aiGoogleBillingConfigSchema = z.object({
 });
 
 export const aiAllocationSchema = z.object({
-  sourceAccountId: z.string().uuid().optional().nullable(),
+  sourceAccountId: aiCreditSourceAccountIdSchema,
   scope: z.nativeEnum(AiCreditScope),
   organizationId: z.string().uuid().optional().nullable(),
   userId: z.string().uuid().optional().nullable(),
@@ -52,7 +57,7 @@ export const aiAllocationSchema = z.object({
 });
 
 export const aiSetAllocationSchema = z.object({
-  sourceAccountId: z.string().uuid().optional().nullable(),
+  sourceAccountId: aiCreditSourceAccountIdSchema,
   scope: z.nativeEnum(AiCreditScope),
   organizationId: z.string().uuid().optional().nullable(),
   userId: z.string().uuid().optional().nullable(),

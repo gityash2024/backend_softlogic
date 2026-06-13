@@ -10,6 +10,7 @@ import {
   OrganizationStorageProvider,
   OrganizationStorageStatus,
   Prisma,
+  StorageCredentialScope,
   UserRole,
 } from '@prisma/client';
 
@@ -44,6 +45,20 @@ const ONEDRIVE_GRAPH_URL = 'https://graph.microsoft.com/v1.0';
 const ONEDRIVE_SCOPES = 'offline_access User.Read Files.ReadWrite';
 
 type CloudProviderName = 'Dropbox' | 'Google Drive' | 'OneDrive';
+type CredentialSource = 'GLOBAL' | 'ORGANIZATION' | 'ENV_LEGACY' | 'NONE';
+
+interface StorageCredentialPayload extends Record<string, unknown> {
+  clientId: string;
+  clientSecret: string;
+  redirectUri?: string;
+}
+
+interface ResolvedStorageCredential {
+  clientId: string;
+  clientSecret: string;
+  redirectUri: string;
+  source: Exclude<CredentialSource, 'NONE'>;
+}
 
 const connectorStatusCode = (status: number): number => {
   if (status === 401 || status === 403) {
@@ -118,7 +133,7 @@ const ensureQuery = (query: string): string => {
 const encryptionKey = (): Buffer =>
   createHash('sha256').update(env.JWT_REFRESH_SECRET).digest();
 
-const encryptJson = (payload: Record<string, unknown>): string => {
+export const encryptJson = (payload: Record<string, unknown>): string => {
   const iv = randomBytes(12);
   const cipher = createCipheriv('aes-256-gcm', encryptionKey(), iv);
   const encrypted = Buffer.concat([
@@ -131,7 +146,7 @@ const encryptJson = (payload: Record<string, unknown>): string => {
     .join('.');
 };
 
-const decryptJson = <T extends Record<string, unknown>>(value: string): T => {
+export const decryptJson = <T extends Record<string, unknown>>(value: string): T => {
   const [ivValue, authTagValue, encryptedValue] = value.split('.');
   if (!ivValue || !authTagValue || !encryptedValue) {
     throw new AppError('Stored cloud connection is invalid. Please reconnect.', 401);
@@ -443,6 +458,124 @@ export class IntegrationsService {
     return 'Google Drive';
   }
 
+  private defaultRedirectUri(provider: OrganizationStorageProvider): string {
+    const callback = provider === OrganizationStorageProvider.DROPBOX
+      ? '/oauth/dropbox/callback'
+      : provider === OrganizationStorageProvider.GOOGLE_DRIVE
+        ? '/oauth/google-drive/callback'
+        : '/oauth/onedrive/callback';
+    return `${env.PUBLIC_APP_URL.replace(/\/$/, '')}${callback}`;
+  }
+
+  private legacyCredential(
+    provider: OrganizationStorageProvider,
+  ): ResolvedStorageCredential | null {
+    if (
+      provider === OrganizationStorageProvider.DROPBOX &&
+      env.DROPBOX_CLIENT_ID &&
+      env.DROPBOX_CLIENT_SECRET
+    ) {
+      return {
+        clientId: env.DROPBOX_CLIENT_ID,
+        clientSecret: env.DROPBOX_CLIENT_SECRET,
+        redirectUri: this.defaultRedirectUri(provider),
+        source: 'ENV_LEGACY',
+      };
+    }
+    if (
+      provider === OrganizationStorageProvider.GOOGLE_DRIVE &&
+      env.GOOGLE_DRIVE_CLIENT_ID &&
+      env.GOOGLE_DRIVE_CLIENT_SECRET
+    ) {
+      return {
+        clientId: env.GOOGLE_DRIVE_CLIENT_ID,
+        clientSecret: env.GOOGLE_DRIVE_CLIENT_SECRET,
+        redirectUri:
+          env.GOOGLE_DRIVE_REDIRECT_URI ?? this.defaultRedirectUri(provider),
+        source: 'ENV_LEGACY',
+      };
+    }
+    if (
+      provider === OrganizationStorageProvider.ONEDRIVE &&
+      env.ONEDRIVE_CLIENT_ID &&
+      env.ONEDRIVE_CLIENT_SECRET
+    ) {
+      return {
+        clientId: env.ONEDRIVE_CLIENT_ID,
+        clientSecret: env.ONEDRIVE_CLIENT_SECRET,
+        redirectUri: env.ONEDRIVE_REDIRECT_URI ?? this.defaultRedirectUri(provider),
+        source: 'ENV_LEGACY',
+      };
+    }
+    return null;
+  }
+
+  private decryptCredential(
+    encryptedCredentials: string,
+    provider: OrganizationStorageProvider,
+    source: Exclude<CredentialSource, 'NONE'>,
+  ): ResolvedStorageCredential | null {
+    const payload = decryptJson<StorageCredentialPayload>(encryptedCredentials);
+    const clientId = payload.clientId?.trim();
+    const clientSecret = payload.clientSecret?.trim();
+    if (!clientId || !clientSecret) {
+      return null;
+    }
+    const redirectUri = payload.redirectUri?.trim() || this.defaultRedirectUri(provider);
+    return { clientId, clientSecret, redirectUri, source };
+  }
+
+  async resolveStorageCredential(
+    provider: OrganizationStorageProvider,
+    organizationId?: string | null,
+  ): Promise<ResolvedStorageCredential | null> {
+    if (organizationId) {
+      const organizationConfig = await prisma.storageCredentialConfig.findFirst({
+        where: {
+          provider,
+          scope: StorageCredentialScope.ORGANIZATION,
+          organizationId,
+        },
+        orderBy: { updatedAt: 'desc' },
+      });
+      if (organizationConfig) {
+        const credential = this.decryptCredential(
+          organizationConfig.encryptedCredentials,
+          provider,
+          'ORGANIZATION',
+        );
+        if (credential) return credential;
+      }
+    }
+
+    const globalConfig = await prisma.storageCredentialConfig.findFirst({
+      where: {
+        provider,
+        scope: StorageCredentialScope.GLOBAL,
+        organizationId: null,
+      },
+      orderBy: { updatedAt: 'desc' },
+    });
+    if (globalConfig) {
+      const credential = this.decryptCredential(
+        globalConfig.encryptedCredentials,
+        provider,
+        'GLOBAL',
+      );
+      if (credential) return credential;
+    }
+
+    return this.legacyCredential(provider);
+  }
+
+  private statusCredentialFields(credential: ResolvedStorageCredential | null) {
+    return {
+      configured: Boolean(credential),
+      credentialConfigured: Boolean(credential),
+      credentialSource: (credential?.source ?? 'NONE') as CredentialSource,
+    };
+  }
+
   private async findOrganizationConnection(
     organizationId: string,
     provider: OrganizationStorageProvider,
@@ -604,31 +737,38 @@ export class IntegrationsService {
     };
   }
 
-  dropboxOAuthUrl(userId: string, organizationId?: string) {
-    if (!env.DROPBOX_CLIENT_ID || !env.DROPBOX_CLIENT_SECRET) {
+  async dropboxOAuthUrl(userId: string, organizationId?: string) {
+    const credential = await this.resolveStorageCredential(
+      OrganizationStorageProvider.DROPBOX,
+      organizationId,
+    );
+    if (!credential) {
       return {
         configured: false,
+        credentialConfigured: false,
+        credentialSource: 'NONE' as CredentialSource,
         authUrl: null,
         message: 'Dropbox OAuth is not configured.',
         action: 'configure',
       };
     }
 
-    const redirectUri = `${env.PUBLIC_APP_URL.replace(/\/$/, '')}/oauth/dropbox/callback`;
     const state = jwt.sign(
       { userId, organizationId, provider: 'dropbox' },
       env.JWT_ACCESS_SECRET,
       { expiresIn: '10m' },
     );
     const url = new URL(DROPBOX_AUTH_URL);
-    url.searchParams.set('client_id', env.DROPBOX_CLIENT_ID);
+    url.searchParams.set('client_id', credential.clientId);
     url.searchParams.set('response_type', 'code');
     url.searchParams.set('token_access_type', 'offline');
-    url.searchParams.set('redirect_uri', redirectUri);
+    url.searchParams.set('redirect_uri', credential.redirectUri);
     url.searchParams.set('state', state);
     url.searchParams.set('scope', DROPBOX_SCOPES);
     return {
       configured: true,
+      credentialConfigured: true,
+      credentialSource: credential.source,
       authUrl: url.toString(),
       message: 'Open this URL to connect Dropbox.',
       action: 'connect',
@@ -642,22 +782,25 @@ export class IntegrationsService {
     if (!input.code || !input.state) {
       throw new AppError('Dropbox callback is missing code or state', 400);
     }
-    if (!env.DROPBOX_CLIENT_ID || !env.DROPBOX_CLIENT_SECRET) {
-      throw new AppError('Dropbox OAuth is not configured.', 400);
-    }
 
     const decoded = jwt.verify(input.state, env.JWT_ACCESS_SECRET) as DropboxStatePayload;
     if (decoded.provider !== 'dropbox' || !decoded.userId) {
       throw new AppError('Invalid Dropbox OAuth state', 400);
     }
+    const credential = await this.resolveStorageCredential(
+      OrganizationStorageProvider.DROPBOX,
+      decoded.organizationId,
+    );
+    if (!credential) {
+      throw new AppError('Dropbox OAuth is not configured.', 400);
+    }
 
-    const redirectUri = `${env.PUBLIC_APP_URL.replace(/\/$/, '')}/oauth/dropbox/callback`;
     const body = new URLSearchParams({
       code: input.code,
       grant_type: 'authorization_code',
-      client_id: env.DROPBOX_CLIENT_ID,
-      client_secret: env.DROPBOX_CLIENT_SECRET,
-      redirect_uri: redirectUri,
+      client_id: credential.clientId,
+      client_secret: credential.clientSecret,
+      redirect_uri: credential.redirectUri,
     });
     const response = await fetch(DROPBOX_TOKEN_URL, {
       method: 'POST',
@@ -720,16 +863,20 @@ export class IntegrationsService {
         )
       : null;
     const connection = organizationConnection ?? await this.findDropboxConnection(userId);
-    const configured = Boolean(env.DROPBOX_CLIENT_ID && env.DROPBOX_CLIENT_SECRET);
+    const credential = await this.resolveStorageCredential(
+      OrganizationStorageProvider.DROPBOX,
+      organizationId,
+    );
     const connected = organizationConnection
       ? organizationConnection.status === OrganizationStorageStatus.CONNECTED &&
         Boolean(organizationConnection.encryptedTokens)
       : Boolean(connection);
+    const credentialFields = this.statusCredentialFields(credential);
     return {
-      configured,
+      ...credentialFields,
       connected,
-      action: connected ? 'refresh' : configured ? 'connect' : 'configure',
-      message: connectorStatusMessage('Dropbox', configured, connected),
+      action: connected ? 'refresh' : credentialFields.configured ? 'connect' : 'configure',
+      message: connectorStatusMessage('Dropbox', credentialFields.configured, connected),
       scopes:
         connection && 'scopes' in connection
           ? connection.scopes ?? null
@@ -927,25 +1074,30 @@ export class IntegrationsService {
     };
   }
 
-  googleDriveOAuthUrl(userId: string, organizationId?: string) {
-    if (!env.GOOGLE_DRIVE_CLIENT_ID || !env.GOOGLE_DRIVE_CLIENT_SECRET) {
+  async googleDriveOAuthUrl(userId: string, organizationId?: string) {
+    const credential = await this.resolveStorageCredential(
+      OrganizationStorageProvider.GOOGLE_DRIVE,
+      organizationId,
+    );
+    if (!credential) {
       return {
         configured: false,
+        credentialConfigured: false,
+        credentialSource: 'NONE' as CredentialSource,
         authUrl: null,
         message: 'Google Drive OAuth is not configured.',
         action: 'configure',
       };
     }
 
-    const redirectUri = this.googleDriveRedirectUri();
     const state = jwt.sign(
       { userId, organizationId, provider: 'google_drive' },
       env.JWT_ACCESS_SECRET,
       { expiresIn: '10m' },
     );
     const url = new URL(GOOGLE_DRIVE_AUTH_URL);
-    url.searchParams.set('client_id', env.GOOGLE_DRIVE_CLIENT_ID);
-    url.searchParams.set('redirect_uri', redirectUri);
+    url.searchParams.set('client_id', credential.clientId);
+    url.searchParams.set('redirect_uri', credential.redirectUri);
     url.searchParams.set('response_type', 'code');
     url.searchParams.set('access_type', 'offline');
     url.searchParams.set('prompt', 'consent');
@@ -953,6 +1105,8 @@ export class IntegrationsService {
     url.searchParams.set('state', state);
     return {
       configured: true,
+      credentialConfigured: true,
+      credentialSource: credential.source,
       authUrl: url.toString(),
       message: 'Open this URL to connect Google Drive.',
       action: 'connect',
@@ -970,9 +1124,6 @@ export class IntegrationsService {
     if (!input.code || !input.state) {
       throw new AppError('Google Drive callback is missing code or state', 400);
     }
-    if (!env.GOOGLE_DRIVE_CLIENT_ID || !env.GOOGLE_DRIVE_CLIENT_SECRET) {
-      throw new AppError('Google Drive OAuth is not configured.', 400);
-    }
 
     const decoded = jwt.verify(
       input.state,
@@ -981,13 +1132,20 @@ export class IntegrationsService {
     if (decoded.provider !== 'google_drive' || !decoded.userId) {
       throw new AppError('Invalid Google Drive OAuth state', 400);
     }
+    const credential = await this.resolveStorageCredential(
+      OrganizationStorageProvider.GOOGLE_DRIVE,
+      decoded.organizationId,
+    );
+    if (!credential) {
+      throw new AppError('Google Drive OAuth is not configured.', 400);
+    }
 
     const body = new URLSearchParams({
       code: input.code,
       grant_type: 'authorization_code',
-      client_id: env.GOOGLE_DRIVE_CLIENT_ID,
-      client_secret: env.GOOGLE_DRIVE_CLIENT_SECRET,
-      redirect_uri: this.googleDriveRedirectUri(),
+      client_id: credential.clientId,
+      client_secret: credential.clientSecret,
+      redirect_uri: credential.redirectUri,
     });
     const response = await fetch(GOOGLE_DRIVE_TOKEN_URL, {
       method: 'POST',
@@ -1050,18 +1208,20 @@ export class IntegrationsService {
       : null;
     const connection =
       organizationConnection ?? await this.findGoogleDriveConnection(userId);
-    const configured = Boolean(
-      env.GOOGLE_DRIVE_CLIENT_ID && env.GOOGLE_DRIVE_CLIENT_SECRET,
+    const credential = await this.resolveStorageCredential(
+      OrganizationStorageProvider.GOOGLE_DRIVE,
+      organizationId,
     );
     const connected = organizationConnection
       ? organizationConnection.status === OrganizationStorageStatus.CONNECTED &&
         Boolean(organizationConnection.encryptedTokens)
       : Boolean(connection);
+    const credentialFields = this.statusCredentialFields(credential);
     return {
-      configured,
+      ...credentialFields,
       connected,
-      action: connected ? 'refresh' : configured ? 'connect' : 'configure',
-      message: connectorStatusMessage('Google Drive', configured, connected),
+      action: connected ? 'refresh' : credentialFields.configured ? 'connect' : 'configure',
+      message: connectorStatusMessage('Google Drive', credentialFields.configured, connected),
       scopes:
         connection && 'scopes' in connection
           ? connection.scopes ?? null
@@ -1290,10 +1450,16 @@ export class IntegrationsService {
     };
   }
 
-  oneDriveOAuthUrl(userId: string, organizationId: string) {
-    if (!env.ONEDRIVE_CLIENT_ID || !env.ONEDRIVE_CLIENT_SECRET) {
+  async oneDriveOAuthUrl(userId: string, organizationId: string) {
+    const credential = await this.resolveStorageCredential(
+      OrganizationStorageProvider.ONEDRIVE,
+      organizationId,
+    );
+    if (!credential) {
       return {
         configured: false,
+        credentialConfigured: false,
+        credentialSource: 'NONE' as CredentialSource,
         authUrl: null,
         message: 'OneDrive OAuth is not configured.',
         action: 'configure',
@@ -1305,14 +1471,16 @@ export class IntegrationsService {
       { expiresIn: '10m' },
     );
     const url = new URL(ONEDRIVE_AUTH_URL);
-    url.searchParams.set('client_id', env.ONEDRIVE_CLIENT_ID);
+    url.searchParams.set('client_id', credential.clientId);
     url.searchParams.set('response_type', 'code');
-    url.searchParams.set('redirect_uri', this.oneDriveRedirectUri());
+    url.searchParams.set('redirect_uri', credential.redirectUri);
     url.searchParams.set('response_mode', 'query');
     url.searchParams.set('scope', ONEDRIVE_SCOPES);
     url.searchParams.set('state', state);
     return {
       configured: true,
+      credentialConfigured: true,
+      credentialSource: credential.source,
       authUrl: url.toString(),
       message: 'Open this URL to connect OneDrive.',
       action: 'connect',
@@ -1330,9 +1498,6 @@ export class IntegrationsService {
     if (!input.code || !input.state) {
       throw new AppError('OneDrive callback is missing code or state', 400);
     }
-    if (!env.ONEDRIVE_CLIENT_ID || !env.ONEDRIVE_CLIENT_SECRET) {
-      throw new AppError('OneDrive OAuth is not configured.', 400);
-    }
     const decoded = jwt.verify(
       input.state,
       env.JWT_ACCESS_SECRET,
@@ -1344,14 +1509,21 @@ export class IntegrationsService {
     ) {
       throw new AppError('Invalid OneDrive OAuth state', 400);
     }
+    const credential = await this.resolveStorageCredential(
+      OrganizationStorageProvider.ONEDRIVE,
+      decoded.organizationId,
+    );
+    if (!credential) {
+      throw new AppError('OneDrive OAuth is not configured.', 400);
+    }
     const response = await fetch(ONEDRIVE_TOKEN_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
-        client_id: env.ONEDRIVE_CLIENT_ID,
-        client_secret: env.ONEDRIVE_CLIENT_SECRET,
+        client_id: credential.clientId,
+        client_secret: credential.clientSecret,
         code: input.code,
-        redirect_uri: this.oneDriveRedirectUri(),
+        redirect_uri: credential.redirectUri,
         grant_type: 'authorization_code',
         scope: ONEDRIVE_SCOPES,
       }),
@@ -1395,17 +1567,19 @@ export class IntegrationsService {
       organizationId,
       OrganizationStorageProvider.ONEDRIVE,
     );
-    const configured = Boolean(
-      env.ONEDRIVE_CLIENT_ID && env.ONEDRIVE_CLIENT_SECRET,
+    const credential = await this.resolveStorageCredential(
+      OrganizationStorageProvider.ONEDRIVE,
+      organizationId,
     );
     const connected =
       connection?.status === OrganizationStorageStatus.CONNECTED &&
       Boolean(connection.encryptedTokens);
+    const credentialFields = this.statusCredentialFields(credential);
     return {
-      configured,
+      ...credentialFields,
       connected,
-      action: connected ? 'refresh' : configured ? 'connect' : 'configure',
-      message: connectorStatusMessage('OneDrive', configured, connected),
+      action: connected ? 'refresh' : credentialFields.configured ? 'connect' : 'configure',
+      message: connectorStatusMessage('OneDrive', credentialFields.configured, connected),
       scopes: ONEDRIVE_SCOPES,
       updatedAt: connection?.updatedAt ?? null,
       externalAccountEmail: connection?.externalAccountEmail ?? null,
@@ -1826,14 +2000,18 @@ export class IntegrationsService {
     if (!tokens.expiresAt || new Date(tokens.expiresAt).getTime() > Date.now() + 60_000) {
       return tokens.accessToken;
     }
-    if (!tokens.refreshToken || !env.DROPBOX_CLIENT_ID || !env.DROPBOX_CLIENT_SECRET) {
+    const credential = await this.resolveStorageCredential(
+      OrganizationStorageProvider.DROPBOX,
+      organizationId,
+    );
+    if (!tokens.refreshToken || !credential) {
       throw new AppError('Dropbox token is expired. Please reconnect Dropbox.', 401);
     }
     const body = new URLSearchParams({
       grant_type: 'refresh_token',
       refresh_token: tokens.refreshToken,
-      client_id: env.DROPBOX_CLIENT_ID,
-      client_secret: env.DROPBOX_CLIENT_SECRET,
+      client_id: credential.clientId,
+      client_secret: credential.clientSecret,
     });
     const response = await fetch(DROPBOX_TOKEN_URL, {
       method: 'POST',
@@ -1903,17 +2081,22 @@ export class IntegrationsService {
       return tokens.accessToken;
     }
     if (
-      !tokens.refreshToken ||
-      !env.GOOGLE_DRIVE_CLIENT_ID ||
-      !env.GOOGLE_DRIVE_CLIENT_SECRET
+      !tokens.refreshToken
     ) {
+      throw new AppError('Google Drive token is expired. Please reconnect Google Drive.', 401);
+    }
+    const credential = await this.resolveStorageCredential(
+      OrganizationStorageProvider.GOOGLE_DRIVE,
+      organizationId,
+    );
+    if (!credential) {
       throw new AppError('Google Drive token is expired. Please reconnect Google Drive.', 401);
     }
     const body = new URLSearchParams({
       grant_type: 'refresh_token',
       refresh_token: tokens.refreshToken,
-      client_id: env.GOOGLE_DRIVE_CLIENT_ID,
-      client_secret: env.GOOGLE_DRIVE_CLIENT_SECRET,
+      client_id: credential.clientId,
+      client_secret: credential.clientSecret,
     });
     const response = await fetch(GOOGLE_DRIVE_TOKEN_URL, {
       method: 'POST',
@@ -1980,18 +2163,23 @@ export class IntegrationsService {
       return tokens.accessToken;
     }
     if (
-      !tokens.refreshToken ||
-      !env.ONEDRIVE_CLIENT_ID ||
-      !env.ONEDRIVE_CLIENT_SECRET
+      !tokens.refreshToken
     ) {
+      throw new AppError('OneDrive token is expired. Please reconnect OneDrive.', 401);
+    }
+    const credential = await this.resolveStorageCredential(
+      OrganizationStorageProvider.ONEDRIVE,
+      organizationId,
+    );
+    if (!credential) {
       throw new AppError('OneDrive token is expired. Please reconnect OneDrive.', 401);
     }
     const response = await fetch(ONEDRIVE_TOKEN_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
-        client_id: env.ONEDRIVE_CLIENT_ID,
-        client_secret: env.ONEDRIVE_CLIENT_SECRET,
+        client_id: credential.clientId,
+        client_secret: credential.clientSecret,
         refresh_token: tokens.refreshToken,
         grant_type: 'refresh_token',
         scope: ONEDRIVE_SCOPES,

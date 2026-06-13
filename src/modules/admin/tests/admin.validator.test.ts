@@ -1,5 +1,6 @@
 import {
   bulkCreateHardwareActivationKeysSchema,
+  createOrganizationSchema,
   createHardwareActivationKeySchema,
   exportQuerySchema,
   listContentExportsQuerySchema,
@@ -43,6 +44,45 @@ describe('admin organization validator', () => {
         teacherUserLimit: 3,
         studentUserLimit: 25,
         parentUserLimit: 25,
+      });
+    }
+  });
+
+  it('normalizes blank optional organization fields to null', () => {
+    const createResult = createOrganizationSchema.safeParse({
+      name: 'Partner One',
+      supportEmail: '',
+      supportPhone: '',
+      brandName: '',
+      brandPrimaryColor: '',
+      brandAccentColor: '',
+    });
+    const updateResult = updateOrganizationSchema.safeParse({
+      supportEmail: '',
+      supportPhone: '',
+      brandName: '',
+      brandPrimaryColor: '',
+      brandAccentColor: '',
+    });
+
+    expect(createResult.success).toBe(true);
+    expect(updateResult.success).toBe(true);
+    if (createResult.success) {
+      expect(createResult.data).toMatchObject({
+        supportEmail: null,
+        supportPhone: null,
+        brandName: null,
+        brandPrimaryColor: null,
+        brandAccentColor: null,
+      });
+    }
+    if (updateResult.success) {
+      expect(updateResult.data).toMatchObject({
+        supportEmail: null,
+        supportPhone: null,
+        brandName: null,
+        brandPrimaryColor: null,
+        brandAccentColor: null,
       });
     }
   });

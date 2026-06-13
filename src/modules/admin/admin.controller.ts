@@ -1,6 +1,8 @@
 import { NextFunction, Request, Response } from 'express';
+import { OrganizationStorageProvider } from '@prisma/client';
 import { env } from '@/config';
 import { ApiResponse } from '@/shared/utils/api-response';
+import { AppError } from '@/shared/errors/AppError';
 import { licensingService } from '@/modules/licensing/licensing.service';
 import { adminService } from './admin.service';
 import type { AdminExportFile } from './admin-export.util';
@@ -32,6 +34,18 @@ const sendExport = (res: Response, file: AdminExportFile): void => {
   res.setHeader('Content-Type', file.contentType);
   res.setHeader('Content-Disposition', `attachment; filename="${file.fileName}"`);
   res.send(file.buffer);
+};
+
+const storageProviderFromParam = (value: string): OrganizationStorageProvider => {
+  const normalized = value.trim().toUpperCase().replace(/-/g, '_');
+  if (
+    normalized === OrganizationStorageProvider.GOOGLE_DRIVE ||
+    normalized === OrganizationStorageProvider.DROPBOX ||
+    normalized === OrganizationStorageProvider.ONEDRIVE
+  ) {
+    return normalized;
+  }
+  throw new AppError('Invalid storage provider', 400);
 };
 
 export class AdminController {
@@ -502,6 +516,49 @@ export class AdminController {
           req.body,
         ),
         'Organization storage updated',
+      );
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async listStorageCredentials(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      ApiResponse.success(
+        res,
+        await adminService.listStorageCredentials(req.user!, req.query as never),
+      );
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async upsertStorageCredential(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      ApiResponse.success(
+        res,
+        await adminService.upsertStorageCredential(
+          req.user!,
+          storageProviderFromParam(req.params.provider),
+          req.body,
+        ),
+        'Storage credentials saved',
+      );
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async deleteStorageCredential(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      ApiResponse.success(
+        res,
+        await adminService.deleteStorageCredential(
+          req.user!,
+          storageProviderFromParam(req.params.provider),
+          req.query as never,
+        ),
+        'Storage credentials deleted',
       );
     } catch (error) {
       next(error);

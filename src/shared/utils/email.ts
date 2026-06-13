@@ -9,6 +9,9 @@ import { env } from '@/config';
 
 const BRAND_LOGO_CID = 'softlogic-logo';
 const BRAND_LOGO_FILENAME = 'softlogic-logo.png';
+const WHITE_LABEL_EMAIL_BRAND = 'AI Smart Board';
+
+export type EmailBrand = 'SOFTLOGIC' | 'AI_SMART_BOARD';
 
 const transporter = nodemailer.createTransport({
   host: env.SMTP_HOST,
@@ -28,6 +31,7 @@ interface EmailOptions {
   subject: string;
   html: string;
   attachments?: Mail.Attachment[];
+  brand?: EmailBrand;
 }
 
 interface BrandEmailLayoutOptions {
@@ -40,6 +44,7 @@ interface BrandEmailLayoutOptions {
   readonly spotlightHtml: string;
   readonly outro: string;
   readonly securityHtml?: string | null;
+  readonly brand?: EmailBrand;
 }
 
 interface WelcomeEmailOptions {
@@ -49,6 +54,7 @@ interface WelcomeEmailOptions {
   readonly inviterName?: string | null;
   readonly appUrl?: string;
   readonly downloadPageUrl?: string;
+  readonly brand?: EmailBrand;
 }
 
 interface PasswordSetupEmailOptions {
@@ -58,6 +64,7 @@ interface PasswordSetupEmailOptions {
   readonly organizationName?: string | null;
   readonly setupUrl: string;
   readonly expiresInLabel?: string;
+  readonly brand?: EmailBrand;
 }
 
 interface PasswordResetEmailOptions {
@@ -66,35 +73,40 @@ interface PasswordResetEmailOptions {
   readonly role?: string | null;
   readonly resetUrl: string;
   readonly expiresInLabel?: string;
+  readonly brand?: EmailBrand;
 }
 
 interface PasswordChangedEmailOptions {
   readonly to: string;
   readonly name?: string | null;
   readonly role?: string | null;
+  readonly brand?: EmailBrand;
 }
 
 interface ForcedLogoutEmailOptions {
   readonly to: string;
   readonly name?: string | null;
+  readonly brand?: EmailBrand;
 }
 
 interface SessionsRevokedEmailOptions {
   readonly to: string;
   readonly name?: string | null;
+  readonly brand?: EmailBrand;
 }
 
 export const sendEmail = async (options: EmailOptions): Promise<void> => {
   try {
+    const resolvedOptions = resolveEmailBrandOptions(options);
     if (isBrevoConfigured()) {
-      await sendBrevoEmail(options);
+      await sendBrevoEmail(resolvedOptions);
     } else {
       await transporter.sendMail({
-        attachments: options.attachments,
-        from: `"${env.EMAIL_FROM_NAME}" <${env.EMAIL_FROM}>`,
-        to: options.to,
-        subject: options.subject,
-        html: options.html,
+        attachments: resolvedOptions.attachments,
+        from: `"${emailSenderName(resolvedOptions.brand)}" <${env.EMAIL_FROM}>`,
+        to: resolvedOptions.to,
+        subject: resolvedOptions.subject,
+        html: resolvedOptions.html,
       });
     }
     console.log(`Email sent to ${options.to}`);
@@ -106,7 +118,10 @@ export const sendEmail = async (options: EmailOptions): Promise<void> => {
 
 const sendBrevoEmail = async (options: EmailOptions): Promise<void> => {
   const senderEmail = env.BREVO_FROM_EMAIL?.trim() || env.EMAIL_FROM;
-  const senderName = env.BREVO_FROM_NAME?.trim() || env.EMAIL_FROM_NAME;
+  const senderName =
+    options.brand === 'AI_SMART_BOARD'
+      ? WHITE_LABEL_EMAIL_BRAND
+      : env.BREVO_FROM_NAME?.trim() || env.EMAIL_FROM_NAME;
   const body: Record<string, unknown> = {
     sender: {
       name: senderName,
@@ -133,6 +148,27 @@ const sendBrevoEmail = async (options: EmailOptions): Promise<void> => {
     const text = await response.text().catch(() => '');
     throw new Error(`Brevo email failed (${response.status}): ${text.slice(0, 300)}`);
   }
+};
+
+const emailSenderName = (brand: EmailBrand | undefined): string =>
+  brand === 'AI_SMART_BOARD' ? WHITE_LABEL_EMAIL_BRAND : env.EMAIL_FROM_NAME;
+
+const applyWhiteLabelEmailBrand = (value: string): string =>
+  value
+    .replace(/SoftLogic/g, WHITE_LABEL_EMAIL_BRAND)
+    .replace(/Softlogic/g, WHITE_LABEL_EMAIL_BRAND)
+    .replace(/SOFTLOGIC/g, WHITE_LABEL_EMAIL_BRAND.toUpperCase());
+
+const resolveEmailBrandOptions = (options: EmailOptions): EmailOptions => {
+  if (options.brand !== 'AI_SMART_BOARD') {
+    return options;
+  }
+  return {
+    ...options,
+    attachments: undefined,
+    subject: applyWhiteLabelEmailBrand(options.subject),
+    html: applyWhiteLabelEmailBrand(options.html),
+  };
 };
 
 const brevoAttachments = async (
@@ -197,14 +233,16 @@ const renderBrandEmailLayout = (
   options: BrandEmailLayoutOptions,
 ): string => {
   const currentYear = new Date().getFullYear();
-  const hasBrandLogo = getBrandLogoPath() != null;
+  const whiteLabel = options.brand === 'AI_SMART_BOARD';
+  const brandLabel = whiteLabel ? WHITE_LABEL_EMAIL_BRAND : env.EMAIL_FROM_NAME;
+  const hasBrandLogo = !whiteLabel && getBrandLogoPath() != null;
   const brandMarkup = hasBrandLogo
     ? `
       <div class="brand-lockup">
         <img src="cid:${BRAND_LOGO_CID}" alt="SoftLogic" class="brand-logo" />
       </div>
     `
-    : `<div class="brand-chip">${env.EMAIL_FROM_NAME}</div>`;
+    : `<div class="brand-chip">${brandLabel}</div>`;
 
   const securityHtml =
     options.securityHtml === undefined
@@ -226,7 +264,7 @@ const renderBrandEmailLayout = (
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <meta name="x-apple-disable-message-reformatting">
-        <title>${env.EMAIL_FROM_NAME}</title>
+        <title>${brandLabel}</title>
         <style>
           body {
             margin: 0;
@@ -423,7 +461,7 @@ const renderBrandEmailLayout = (
                       Need help? Reply to this email or contact your SoftLogic administrator.
                     </p>
                     <p>
-                      &copy; ${currentYear} ${env.EMAIL_FROM_NAME}. All rights reserved.
+                      &copy; ${currentYear} ${brandLabel}. All rights reserved.
                     </p>
                   </td>
                 </tr>
@@ -436,8 +474,9 @@ const renderBrandEmailLayout = (
   `;
 };
 
-export const getOtpEmailHtml = (otp: string): string => {
+export const getOtpEmailHtml = (otp: string, brand?: EmailBrand): string => {
   return renderBrandEmailLayout({
+    brand,
     preheader: `Your SoftLogic verification code is ${otp}. This code expires in 10 minutes.`,
     eyebrow: 'Login Verification',
     title: 'Your one-time sign-in code',
@@ -635,6 +674,7 @@ const passwordEmailCopyForRole = (
 
 export const getWelcomeEmailHtml = ({
   appUrl = env.PUBLIC_APP_URL,
+  brand,
   downloadPageUrl = env.PUBLIC_DOWNLOAD_PAGE_URL,
   inviterName,
   name,
@@ -649,6 +689,7 @@ export const getWelcomeEmailHtml = ({
     : null;
 
   return renderBrandEmailLayout({
+    brand,
     preheader: 'Welcome to SoftLogic Whiteboard. Your account is ready.',
     eyebrow: 'Welcome to SoftLogic',
     heroTitle: 'Your SoftLogic workspace is ready.',
@@ -693,6 +734,7 @@ export const sendWelcomeEmail = async ({
   try {
     const brandLogoAttachments = getBrandLogoEmailAttachments();
     await sendEmail({
+      brand: templateOptions.brand,
       attachments:
         brandLogoAttachments.length > 0 ? brandLogoAttachments : undefined,
       to,
@@ -707,6 +749,7 @@ export const sendWelcomeEmail = async ({
 const DEFAULT_PASSWORD_SETUP_EXPIRY_LABEL = '7 days';
 
 export const getPasswordSetupEmailHtml = ({
+  brand,
   name,
   role,
   organizationName,
@@ -723,6 +766,7 @@ export const getPasswordSetupEmailHtml = ({
   const copy = passwordEmailCopyForRole(role, 'setup');
 
   return renderBrandEmailLayout({
+    brand,
     preheader: copy.preheader,
     eyebrow: copy.eyebrow,
     heroTitle: copy.heroTitle,
@@ -771,6 +815,7 @@ export const sendPasswordSetupEmail = async ({
     const brandLogoAttachments = getBrandLogoEmailAttachments();
     const copy = passwordEmailCopyForRole(templateOptions.role, 'setup');
     await sendEmail({
+      brand: templateOptions.brand,
       attachments:
         brandLogoAttachments.length > 0 ? brandLogoAttachments : undefined,
       to,
@@ -785,6 +830,7 @@ export const sendPasswordSetupEmail = async ({
 };
 
 export const getPasswordResetEmailHtml = ({
+  brand,
   name,
   role,
   resetUrl,
@@ -797,6 +843,7 @@ export const getPasswordResetEmailHtml = ({
   const copy = passwordEmailCopyForRole(role, 'reset');
 
   return renderBrandEmailLayout({
+    brand,
     preheader: copy.preheader,
     eyebrow: copy.eyebrow,
     heroTitle: copy.heroTitle,
@@ -847,6 +894,7 @@ export const sendPasswordResetEmail = async ({
     const brandLogoAttachments = getBrandLogoEmailAttachments();
     const copy = passwordEmailCopyForRole(templateOptions.role, 'reset');
     await sendEmail({
+      brand: templateOptions.brand,
       attachments:
         brandLogoAttachments.length > 0 ? brandLogoAttachments : undefined,
       to,
@@ -861,6 +909,7 @@ export const sendPasswordResetEmail = async ({
 };
 
 export const getPasswordChangedEmailHtml = ({
+  brand,
   name,
   role,
 }: Omit<PasswordChangedEmailOptions, 'to'>): string => {
@@ -868,6 +917,7 @@ export const getPasswordChangedEmailHtml = ({
   const copy = passwordEmailCopyForRole(role, 'changed');
 
   return renderBrandEmailLayout({
+    brand,
     preheader: copy.preheader,
     eyebrow: copy.eyebrow,
     heroTitle: copy.heroTitle,
@@ -901,6 +951,7 @@ export const sendPasswordChangedEmail = async ({
     const brandLogoAttachments = getBrandLogoEmailAttachments();
     const copy = passwordEmailCopyForRole(templateOptions.role, 'changed');
     await sendEmail({
+      brand: templateOptions.brand,
       attachments:
         brandLogoAttachments.length > 0 ? brandLogoAttachments : undefined,
       to,
@@ -915,11 +966,13 @@ export const sendPasswordChangedEmail = async ({
 };
 
 export const getForcedLogoutEmailHtml = ({
+  brand,
   name,
 }: Omit<ForcedLogoutEmailOptions, 'to'>): string => {
   const safeName = escapeHtml(name?.trim() || 'there');
 
   return renderBrandEmailLayout({
+    brand,
     preheader: 'You were signed out of all devices by an administrator.',
     eyebrow: 'SoftLogic account security',
     heroTitle: 'You were signed out of all devices.',
@@ -954,6 +1007,7 @@ export const sendForcedLogoutEmail = async ({
   try {
     const brandLogoAttachments = getBrandLogoEmailAttachments();
     await sendEmail({
+      brand: templateOptions.brand,
       attachments:
         brandLogoAttachments.length > 0 ? brandLogoAttachments : undefined,
       to,
@@ -968,11 +1022,13 @@ export const sendForcedLogoutEmail = async ({
 };
 
 export const getSessionsRevokedEmailHtml = ({
+  brand,
   name,
 }: Omit<SessionsRevokedEmailOptions, 'to'>): string => {
   const safeName = escapeHtml(name?.trim() || 'there');
 
   return renderBrandEmailLayout({
+    brand,
     preheader: 'Your sessions were signed out by an administrator.',
     eyebrow: 'SoftLogic account security',
     heroTitle: 'Your sessions were signed out.',
@@ -1006,6 +1062,7 @@ export const sendSessionsRevokedEmail = async ({
   try {
     const brandLogoAttachments = getBrandLogoEmailAttachments();
     await sendEmail({
+      brand: templateOptions.brand,
       attachments:
         brandLogoAttachments.length > 0 ? brandLogoAttachments : undefined,
       to,
@@ -1591,11 +1648,13 @@ export const sendSupportStatusChangeEmail = async ({
 };
 
 export const getLiveSessionInviteEmailHtml = ({
+  brand,
   code,
   teacherName,
   sessionTitle,
   downloadPageUrl,
 }: {
+  brand?: EmailBrand;
   code: string;
   teacherName: string;
   sessionTitle: string;
@@ -1606,6 +1665,7 @@ export const getLiveSessionInviteEmailHtml = ({
   const safeDownloadPageUrl = escapeHtml(downloadPageUrl);
 
   return renderBrandEmailLayout({
+    brand,
     preheader: `Your SoftLogic live-session code is ${code}.`,
     eyebrow: 'Live Session Invite',
     title: 'Join your SoftLogic classroom session',

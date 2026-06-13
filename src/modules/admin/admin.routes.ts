@@ -12,8 +12,10 @@ import {
   createSubscriptionSchema,
   exportActivationKeysQuerySchema,
   createUserSchema,
+  deleteStorageCredentialQuerySchema,
   extendAiCreditsSchema,
   exportQuerySchema,
+  listStorageCredentialsQuerySchema,
   listActivityQuerySchema,
   listContentCanvasesQuerySchema,
   listContentExportsQuerySchema,
@@ -30,6 +32,7 @@ import {
   updateSubscriptionSchema,
   updateUserSchema,
   upsertOrganizationStorageSchema,
+  upsertStorageCredentialSchema,
 } from './admin.validator';
 
 const router = Router();
@@ -47,6 +50,9 @@ router.use('/ai', adminAiRoutes);
 
 router.get('/organizations', validate(listOrganizationsQuerySchema, 'query'), adminController.listOrganizations);
 router.get('/organizations/export', validate(listOrganizationsQuerySchema.merge(exportQuerySchema), 'query'), adminController.exportOrganizations);
+router.get('/storage-credentials', validate(listStorageCredentialsQuerySchema, 'query'), adminController.listStorageCredentials);
+router.put('/storage-credentials/:provider', validate(upsertStorageCredentialSchema), adminController.upsertStorageCredential);
+router.delete('/storage-credentials/:provider', validate(deleteStorageCredentialQuerySchema, 'query'), adminController.deleteStorageCredential);
 router.get('/organizations/:id', adminController.getOrganization);
 router.post('/organizations', validate(createOrganizationSchema), adminController.createOrganization);
 router.put('/organizations/:id', validate(updateOrganizationSchema), adminController.updateOrganization);

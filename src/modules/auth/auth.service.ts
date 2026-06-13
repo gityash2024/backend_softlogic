@@ -1,6 +1,7 @@
 import {
   GoogleDesktopAuthAttempt,
   GoogleDesktopAuthAttemptStatus,
+  BrandingMode,
   Otp,
   OtpType,
   Prisma,
@@ -19,6 +20,7 @@ import { findUserContextById } from "@/modules/users/user-context.service";
 import { AuthError } from "@/shared/errors/AuthError";
 import { AppError } from "@/shared/errors/AppError";
 import {
+  type EmailBrand,
   getBrandLogoEmailAttachments,
   getOtpEmailHtml,
   sendEmail,
@@ -116,6 +118,21 @@ const refreshSessionTtlMs = (): number => {
 };
 
 export class AuthService {
+  private async emailBrandForUser(
+    user: Pick<User, "primaryOrganizationId">,
+  ): Promise<EmailBrand> {
+    if (!user.primaryOrganizationId) {
+      return "SOFTLOGIC";
+    }
+    const organization = await prisma.organization.findFirst({
+      where: { id: user.primaryOrganizationId, deletedAt: null },
+      select: { brandingMode: true },
+    });
+    return organization?.brandingMode === BrandingMode.WHITE_LABEL
+      ? "AI_SMART_BOARD"
+      : "SOFTLOGIC";
+  }
+
   /**
    * Resolves the error to throw when no usable active account matched the
    * supplied email. If a soft-deleted account still owns the address, surface a
@@ -195,12 +212,14 @@ export class AuthService {
 
     try {
       const brandLogoAttachments = getBrandLogoEmailAttachments();
+      const brand = await this.emailBrandForUser(user);
       await sendEmail({
+        brand,
         attachments:
           brandLogoAttachments.length > 0 ? brandLogoAttachments : undefined,
         to: email,
         subject: "Your Softlogic Whiteboard Login Code",
-        html: getOtpEmailHtml(otpCode),
+        html: getOtpEmailHtml(otpCode, brand),
       });
     } catch {
       console.log(`OTP for ${email}: ${otpCode}`);
@@ -984,6 +1003,7 @@ export class AuthService {
 
     try {
       await sendPasswordChangedEmail({
+        brand: await this.emailBrandForUser(otp.user),
         to: setup.email,
         name: setup.name,
         role: setup.role,
@@ -1050,6 +1070,7 @@ export class AuthService {
 
     try {
       await sendPasswordChangedEmail({
+        brand: await this.emailBrandForUser(user),
         to: user.email,
         name: user.name,
         role: user.role,
@@ -1107,6 +1128,7 @@ export class AuthService {
 
     try {
       await sendPasswordChangedEmail({
+        brand: await this.emailBrandForUser(user),
         to: user.email,
         name: user.name,
         role: user.role,
@@ -1182,12 +1204,14 @@ export class AuthService {
 
     try {
       const brandLogoAttachments = getBrandLogoEmailAttachments();
+      const brand = await this.emailBrandForUser(user);
       await sendEmail({
+        brand,
         attachments:
           brandLogoAttachments.length > 0 ? brandLogoAttachments : undefined,
         to: user.email,
         subject: "Your Softlogic Whiteboard Password Reset Code",
-        html: getOtpEmailHtml(otpCode),
+        html: getOtpEmailHtml(otpCode, brand),
       });
     } catch {
       console.log(`Password reset OTP for ${user.email}: ${otpCode}`);
@@ -1235,6 +1259,7 @@ export class AuthService {
 
     try {
       await sendPasswordChangedEmail({
+        brand: await this.emailBrandForUser(user),
         to: user.email,
         name: user.name,
         role: user.role,
@@ -1340,6 +1365,7 @@ export class AuthService {
     const token = await this.createPasswordResetToken(user.id);
     const resetUrl = this.passwordResetUrl(token);
     await sendPasswordResetEmail({
+      brand: await this.emailBrandForUser(user),
       to: user.email,
       name: user.name,
       role: user.role,
@@ -1423,7 +1449,7 @@ export class AuthService {
   }
 
   private get shouldRelaxAuthLimits(): boolean {
-    return env.TESTING_RELAX_AUTH_LIMITS;
+    return this.isDevelopmentMode || env.TESTING_RELAX_AUTH_LIMITS;
   }
 
   private shouldUseFixedOtpForEmail(email: string): boolean {
@@ -1437,6 +1463,10 @@ export class AuthService {
 
     if (!(this.isDevelopmentMode || this.isTestMode)) {
       return false;
+    }
+
+    if (this.isDevelopmentMode) {
+      return true;
     }
 
     return this.fixedOtpAllowedEmails.has(email);

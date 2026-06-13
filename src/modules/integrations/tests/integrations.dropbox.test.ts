@@ -1,7 +1,7 @@
 import { OAuthProvider } from '@prisma/client';
 
-import { prisma } from '@/config';
-import { integrationsService } from '@/modules/integrations/integrations.service';
+import { env, prisma } from '@/config';
+import { encryptJson, integrationsService } from '@/modules/integrations/integrations.service';
 import { fileStorageService } from '@/shared/services/file-storage.service';
 
 jest.mock('@/config', () => ({
@@ -29,6 +29,9 @@ jest.mock('@/config', () => ({
       findUnique: jest.fn(),
       upsert: jest.fn(),
       updateMany: jest.fn(),
+    },
+    storageCredentialConfig: {
+      findFirst: jest.fn(),
     },
     lmsConnection: {
       findMany: jest.fn(),
@@ -64,6 +67,9 @@ const mockedPrisma = prisma as unknown as {
     upsert: jest.Mock;
     updateMany: jest.Mock;
   };
+  storageCredentialConfig: {
+    findFirst: jest.Mock;
+  };
   canvas: {
     findMany: jest.Mock;
   };
@@ -83,10 +89,11 @@ global.fetch = mockedFetch as unknown as typeof fetch;
 describe('IntegrationsService Dropbox', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    mockedPrisma.storageCredentialConfig.findFirst.mockResolvedValue(null);
   });
 
-  it('creates a signed Dropbox OAuth URL', () => {
-    const result = integrationsService.dropboxOAuthUrl('user-1');
+  it('creates a signed Dropbox OAuth URL', async () => {
+    const result = await integrationsService.dropboxOAuthUrl('user-1');
 
     expect(result.configured).toBe(true);
     expect(result.action).toBe('connect');
@@ -97,6 +104,65 @@ describe('IntegrationsService Dropbox', () => {
       'https://app.example.com/oauth/dropbox/callback',
     );
     expect(url.searchParams.get('state')).toBeTruthy();
+  });
+
+  it('uses global saved credentials when organization credentials are absent', async () => {
+    mockedPrisma.storageCredentialConfig.findFirst
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({
+        encryptedCredentials: encryptJson({
+          clientId: 'global-dropbox-client',
+          clientSecret: 'global-dropbox-secret',
+          redirectUri: 'https://app.example.com/oauth/dropbox/callback',
+        }),
+      });
+
+    const result = await integrationsService.dropboxOAuthUrl('user-1', 'org-1');
+    const url = new URL(result.authUrl!);
+
+    expect(result.credentialSource).toBe('GLOBAL');
+    expect(url.searchParams.get('client_id')).toBe('global-dropbox-client');
+  });
+
+  it('uses organization saved credentials before global credentials', async () => {
+    mockedPrisma.storageCredentialConfig.findFirst.mockResolvedValueOnce({
+      encryptedCredentials: encryptJson({
+        clientId: 'org-dropbox-client',
+        clientSecret: 'org-dropbox-secret',
+        redirectUri: 'https://org.example.com/oauth/dropbox/callback',
+      }),
+    });
+
+    const result = await integrationsService.dropboxOAuthUrl('user-1', 'org-1');
+    const url = new URL(result.authUrl!);
+
+    expect(result.credentialSource).toBe('ORGANIZATION');
+    expect(url.searchParams.get('client_id')).toBe('org-dropbox-client');
+    expect(url.searchParams.get('redirect_uri')).toBe(
+      'https://org.example.com/oauth/dropbox/callback',
+    );
+  });
+
+  it('returns an actionable configure response when saved and legacy credentials are missing', async () => {
+    const oldClientId = env.DROPBOX_CLIENT_ID;
+    const oldClientSecret = env.DROPBOX_CLIENT_SECRET;
+    const mutableEnv = env as unknown as Record<string, string | undefined>;
+    mutableEnv.DROPBOX_CLIENT_ID = undefined;
+    mutableEnv.DROPBOX_CLIENT_SECRET = undefined;
+    mockedPrisma.storageCredentialConfig.findFirst.mockResolvedValue(null);
+
+    try {
+      await expect(integrationsService.dropboxOAuthUrl('user-1', 'org-1')).resolves.toMatchObject({
+        configured: false,
+        credentialConfigured: false,
+        credentialSource: 'NONE',
+        action: 'configure',
+        authUrl: null,
+      });
+    } finally {
+      mutableEnv.DROPBOX_CLIENT_ID = oldClientId;
+      mutableEnv.DROPBOX_CLIENT_SECRET = oldClientSecret;
+    }
   });
 
   it('returns an actionable disconnected Dropbox status', async () => {
@@ -122,7 +188,7 @@ describe('IntegrationsService Dropbox', () => {
         scope: 'files.metadata.read files.content.read',
       }),
     });
-    const state = new URL(integrationsService.dropboxOAuthUrl('user-1').authUrl!)
+    const state = new URL((await integrationsService.dropboxOAuthUrl('user-1')).authUrl!)
       .searchParams
       .get('state')!;
 
@@ -147,7 +213,7 @@ describe('IntegrationsService Dropbox', () => {
   });
 
   it('lists Dropbox files for a connected user', async () => {
-    const state = new URL(integrationsService.dropboxOAuthUrl('user-1').authUrl!)
+    const state = new URL((await integrationsService.dropboxOAuthUrl('user-1')).authUrl!)
       .searchParams
       .get('state')!;
     mockedFetch.mockResolvedValueOnce({
@@ -191,7 +257,7 @@ describe('IntegrationsService Dropbox', () => {
   });
 
   it('downloads and stores a Dropbox file', async () => {
-    const state = new URL(integrationsService.dropboxOAuthUrl('user-1').authUrl!)
+    const state = new URL((await integrationsService.dropboxOAuthUrl('user-1')).authUrl!)
       .searchParams
       .get('state')!;
     mockedFetch.mockResolvedValueOnce({
@@ -244,7 +310,7 @@ describe('IntegrationsService Dropbox', () => {
   });
 
   it('uploads a file to Dropbox', async () => {
-    const state = new URL(integrationsService.dropboxOAuthUrl('user-1').authUrl!)
+    const state = new URL((await integrationsService.dropboxOAuthUrl('user-1')).authUrl!)
       .searchParams
       .get('state')!;
     mockedFetch.mockResolvedValueOnce({
@@ -296,8 +362,8 @@ describe('IntegrationsService Dropbox', () => {
     );
   });
 
-  it('creates a signed Google Drive OAuth URL', () => {
-    const result = integrationsService.googleDriveOAuthUrl('user-1');
+  it('creates a signed Google Drive OAuth URL', async () => {
+    const result = await integrationsService.googleDriveOAuthUrl('user-1');
 
     expect(result.configured).toBe(true);
     expect(result.action).toBe('connect');
@@ -324,7 +390,7 @@ describe('IntegrationsService Dropbox', () => {
   });
 
   it('lists Google Drive files for a connected user', async () => {
-    const state = new URL(integrationsService.googleDriveOAuthUrl('user-1').authUrl!)
+    const state = new URL((await integrationsService.googleDriveOAuthUrl('user-1')).authUrl!)
       .searchParams
       .get('state')!;
     mockedFetch.mockResolvedValueOnce({
@@ -474,10 +540,11 @@ describe('IntegrationsService Dropbox', () => {
 describe('IntegrationsService OneDrive', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    mockedPrisma.storageCredentialConfig.findFirst.mockResolvedValue(null);
   });
 
-  it('creates an organization-scoped Microsoft OAuth URL', () => {
-    const result = integrationsService.oneDriveOAuthUrl('user-1', 'org-1');
+  it('creates an organization-scoped Microsoft OAuth URL', async () => {
+    const result = await integrationsService.oneDriveOAuthUrl('user-1', 'org-1');
 
     expect(result.configured).toBe(true);
     const url = new URL(result.authUrl!);
