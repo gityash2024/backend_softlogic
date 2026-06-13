@@ -15,6 +15,25 @@ jest.mock('@/shared/middleware/auth.middleware', () => ({
     };
     next();
   },
+  authMiddlewareAllowMissingClientSession: (req: any, _res: any, next: any) => {
+    const role = req.headers['x-test-role'] ?? UserRole.TEACHER;
+    req.user = {
+      userId: req.headers['x-test-user-id'] ?? 'teacher-1',
+      email: req.headers['x-test-email'] ?? 'teacher@example.com',
+      role,
+      organizationId: 'org-1',
+    };
+    next();
+  },
+  optionalAuthMiddleware: (req: any, _res: any, next: any) => {
+    req.user = {
+      userId: req.headers['x-test-user-id'] ?? 'teacher-1',
+      email: req.headers['x-test-email'] ?? 'teacher@example.com',
+      role: req.headers['x-test-role'] ?? UserRole.TEACHER,
+      organizationId: 'org-1',
+    };
+    next();
+  },
   roleGuard: () => (_req: any, _res: any, next: any) => next(),
 }));
 

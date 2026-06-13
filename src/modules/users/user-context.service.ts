@@ -201,7 +201,14 @@ const toOrganizationSummary = (organization: Organization): OrganizationSummary 
   teacherOnlyMode: organization.teacherOnlyMode,
   supportEmail: organization.supportEmail ?? null,
   supportPhone: organization.supportPhone ?? null,
-  storageProviders: organization.storageProviders ?? [],
+  storageProviders:
+    organization.kind === OrganizationKind.INTERNAL
+      ? [
+          OrganizationStorageProvider.GOOGLE_DRIVE,
+          OrganizationStorageProvider.DROPBOX,
+          OrganizationStorageProvider.ONEDRIVE,
+        ]
+      : organization.storageProviders ?? [],
   defaultStorageProvider: organization.storageProvider ?? null,
   storageProvider: organization.storageProvider ?? null,
   storageStatus: organization.storageStatus,

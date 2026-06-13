@@ -3,11 +3,23 @@ import { readFile, stat } from 'fs/promises';
 import path from 'path';
 import { Readable } from 'stream';
 import jwt from 'jsonwebtoken';
-import { ExportStatus, OAuthProvider, Prisma } from '@prisma/client';
+import {
+  ExportStatus,
+  OAuthProvider,
+  OrganizationKind,
+  OrganizationStorageProvider,
+  OrganizationStorageStatus,
+  Prisma,
+  UserRole,
+} from '@prisma/client';
 
 import { env, prisma } from '@/config';
 import { AppError } from '@/shared/errors/AppError';
 import { fileStorageService } from '@/shared/services/file-storage.service';
+import {
+  ensureOrganizationManaged,
+  type AuthenticatedUserLike,
+} from '@/shared/utils/access-control';
 
 const DROPBOX_AUTH_URL = 'https://www.dropbox.com/oauth2/authorize';
 const DROPBOX_TOKEN_URL = 'https://api.dropboxapi.com/oauth2/token';
@@ -23,6 +35,15 @@ const GOOGLE_DRIVE_FILES_URL = 'https://www.googleapis.com/drive/v3/files';
 const GOOGLE_DRIVE_UPLOAD_URL = 'https://www.googleapis.com/upload/drive/v3/files';
 const GOOGLE_DRIVE_FOLDER_MIME = 'application/vnd.google-apps.folder';
 const GOOGLE_DRIVE_SCOPES = 'https://www.googleapis.com/auth/drive.file';
+
+const ONEDRIVE_AUTH_URL =
+  'https://login.microsoftonline.com/common/oauth2/v2.0/authorize';
+const ONEDRIVE_TOKEN_URL =
+  'https://login.microsoftonline.com/common/oauth2/v2.0/token';
+const ONEDRIVE_GRAPH_URL = 'https://graph.microsoft.com/v1.0';
+const ONEDRIVE_SCOPES = 'offline_access User.Read Files.ReadWrite';
+
+type CloudProviderName = 'Dropbox' | 'Google Drive' | 'OneDrive';
 
 const connectorStatusCode = (status: number): number => {
   if (status === 401 || status === 403) {
@@ -41,7 +62,7 @@ const connectorStatusCode = (status: number): number => {
 };
 
 const connectorError = (
-  provider: 'Dropbox' | 'Google Drive',
+  provider: CloudProviderName,
   action: string,
   status: number,
 ): AppError => {
@@ -64,7 +85,7 @@ const connectorError = (
 };
 
 const connectorTokenRefreshError = (
-  provider: 'Dropbox' | 'Google Drive',
+  provider: CloudProviderName,
   status: number,
 ): AppError =>
   new AppError(
@@ -73,7 +94,7 @@ const connectorTokenRefreshError = (
   );
 
 const connectorStatusMessage = (
-  provider: 'Dropbox' | 'Google Drive',
+  provider: CloudProviderName,
   configured: boolean,
   connected: boolean,
 ): string => {
@@ -221,6 +242,7 @@ interface DropboxListResponse {
 interface DropboxStatePayload {
   userId: string;
   provider: 'dropbox';
+  organizationId?: string;
 }
 
 interface GoogleDriveStoredTokens extends Record<string, unknown> {
@@ -253,6 +275,38 @@ interface GoogleDriveListResponse {
 interface GoogleDriveStatePayload {
   userId: string;
   provider: 'google_drive';
+  organizationId?: string;
+}
+
+interface OneDriveStoredTokens extends Record<string, unknown> {
+  accessToken: string;
+  refreshToken?: string;
+  tokenType?: string;
+  expiresAt?: string;
+}
+
+interface OneDriveTokenResponse {
+  access_token: string;
+  refresh_token?: string;
+  token_type?: string;
+  expires_in?: number;
+  scope?: string;
+}
+
+interface OneDriveStatePayload {
+  userId: string;
+  organizationId: string;
+  provider: 'onedrive';
+}
+
+interface OneDriveItem {
+  id?: string;
+  name?: string;
+  size?: number;
+  lastModifiedDateTime?: string;
+  folder?: { childCount?: number };
+  file?: { mimeType?: string };
+  webUrl?: string;
 }
 
 interface CloudUploadInput {
@@ -273,7 +327,9 @@ interface CloudFolderInput {
   parentId?: string;
 }
 
-const providerValue = (provider: 'DROPBOX' | 'GOOGLE_DRIVE'): OAuthProvider =>
+const providerValue = (
+  provider: 'DROPBOX' | 'GOOGLE_DRIVE' | 'ONEDRIVE',
+): OAuthProvider =>
   provider as OAuthProvider;
 
 const normalizeFolderPath = (value?: string): string => {
@@ -321,6 +377,140 @@ const multerFileFromBuffer = (
 const escapeDriveQueryValue = (value: string): string => value.replace(/'/g, "\\'");
 
 export class IntegrationsService {
+  async resolveStorageOrganizationId(
+    actor: AuthenticatedUserLike,
+    provider: OrganizationStorageProvider,
+    requestedOrganizationId?: string,
+  ): Promise<string> {
+    let organizationId = requestedOrganizationId?.trim() || actor.organizationId || '';
+    if (requestedOrganizationId) {
+      const adminRoles: UserRole[] = [
+          UserRole.SUPER_ADMIN,
+          UserRole.PARTNER_ADMIN,
+          UserRole.CUSTOMER_ADMIN,
+          UserRole.ADMIN,
+        ];
+      if (!adminRoles.includes(actor.role)) {
+        throw new AppError('Only organization admins can configure storage', 403);
+      }
+      await ensureOrganizationManaged(requestedOrganizationId, actor);
+    }
+    if (!organizationId) {
+      const user = await prisma.user.findUnique({
+        where: { id: actor.userId },
+        select: {
+          primaryOrganizationId: true,
+          memberships: {
+            select: { organizationId: true },
+            take: 1,
+          },
+        },
+      });
+      organizationId =
+        user?.primaryOrganizationId ?? user?.memberships[0]?.organizationId ?? '';
+    }
+    if (!organizationId) {
+      throw new AppError('Organization assignment is required for cloud storage', 403);
+    }
+
+    const organization = await prisma.organization.findUnique({
+      where: { id: organizationId },
+      select: {
+        kind: true,
+        status: true,
+        deletedAt: true,
+        storageProviders: true,
+      },
+    });
+    if (!organization || organization.deletedAt || organization.status !== 'ACTIVE') {
+      throw new AppError('Organization not found', 404);
+    }
+    const allowed =
+      organization.kind === OrganizationKind.INTERNAL ||
+      organization.storageProviders.includes(provider);
+    if (!allowed) {
+      throw new AppError(
+        `${this.storageProviderLabel(provider)} is not enabled for this organization`,
+        403,
+      );
+    }
+    return organizationId;
+  }
+
+  private storageProviderLabel(provider: OrganizationStorageProvider): CloudProviderName {
+    if (provider === OrganizationStorageProvider.DROPBOX) return 'Dropbox';
+    if (provider === OrganizationStorageProvider.ONEDRIVE) return 'OneDrive';
+    return 'Google Drive';
+  }
+
+  private async findOrganizationConnection(
+    organizationId: string,
+    provider: OrganizationStorageProvider,
+  ) {
+    return prisma.organizationStorageConnection.findUnique({
+      where: {
+        organizationId_provider: {
+          organizationId,
+          provider,
+        },
+      },
+    });
+  }
+
+  private async storeOrganizationConnection(input: {
+    organizationId: string;
+    provider: OrganizationStorageProvider;
+    actorUserId: string;
+    encryptedTokens: string;
+    externalAccountEmail?: string | null;
+  }) {
+    const connection = await prisma.organizationStorageConnection.upsert({
+      where: {
+        organizationId_provider: {
+          organizationId: input.organizationId,
+          provider: input.provider,
+        },
+      },
+      create: {
+        organizationId: input.organizationId,
+        provider: input.provider,
+        status: OrganizationStorageStatus.CONNECTED,
+        encryptedTokens: input.encryptedTokens,
+        connectedById: input.actorUserId,
+        externalAccountEmail: input.externalAccountEmail,
+        validatedAt: new Date(),
+      },
+      update: {
+        status: OrganizationStorageStatus.CONNECTED,
+        encryptedTokens: input.encryptedTokens,
+        connectedById: input.actorUserId,
+        externalAccountEmail: input.externalAccountEmail,
+        validatedAt: new Date(),
+        disconnectedAt: null,
+        lastError: null,
+      },
+    });
+    const organization = await prisma.organization.findUnique({
+      where: { id: input.organizationId },
+      select: { storageProviders: true, storageProvider: true },
+    });
+    const providers = Array.from(
+      new Set([...(organization?.storageProviders ?? []), input.provider]),
+    );
+    await prisma.organization.update({
+      where: { id: input.organizationId },
+      data: {
+        storageProviders: { set: providers },
+        storageProvider: organization?.storageProvider ?? input.provider,
+        storageStatus:
+          (organization?.storageProvider ?? input.provider) === input.provider
+            ? OrganizationStorageStatus.CONNECTED
+            : undefined,
+      },
+    });
+    return connection;
+  }
+
   async searchGoogleImages(query: string) {
     const q = ensureQuery(query);
     if (!env.SERPER_API_KEY) {
@@ -414,7 +604,7 @@ export class IntegrationsService {
     };
   }
 
-  dropboxOAuthUrl(userId: string) {
+  dropboxOAuthUrl(userId: string, organizationId?: string) {
     if (!env.DROPBOX_CLIENT_ID || !env.DROPBOX_CLIENT_SECRET) {
       return {
         configured: false,
@@ -426,7 +616,7 @@ export class IntegrationsService {
 
     const redirectUri = `${env.PUBLIC_APP_URL.replace(/\/$/, '')}/oauth/dropbox/callback`;
     const state = jwt.sign(
-      { userId, provider: 'dropbox' },
+      { userId, organizationId, provider: 'dropbox' },
       env.JWT_ACCESS_SECRET,
       { expiresIn: '10m' },
     );
@@ -489,54 +679,90 @@ export class IntegrationsService {
       expiresAt: expiresAt?.toISOString(),
     };
 
-    await prisma.oAuthConnection.upsert({
-      where: {
-        userId_provider: {
+    if (decoded.organizationId) {
+      await this.storeOrganizationConnection({
+        organizationId: decoded.organizationId,
+        provider: OrganizationStorageProvider.DROPBOX,
+        actorUserId: decoded.userId,
+        encryptedTokens: encryptJson(storedTokens),
+      });
+    } else {
+      await prisma.oAuthConnection.upsert({
+        where: {
+          userId_provider: {
+            userId: decoded.userId,
+            provider: OAuthProvider.DROPBOX,
+          },
+        },
+        create: {
           userId: decoded.userId,
           provider: OAuthProvider.DROPBOX,
+          encryptedTokens: encryptJson(storedTokens),
+          scopes: token.scope ?? DROPBOX_SCOPES,
+          expiresAt,
         },
-      },
-      create: {
-        userId: decoded.userId,
-        provider: OAuthProvider.DROPBOX,
-        encryptedTokens: encryptJson(storedTokens),
-        scopes: token.scope ?? DROPBOX_SCOPES,
-        expiresAt,
-      },
-      update: {
-        encryptedTokens: encryptJson(storedTokens),
-        scopes: token.scope ?? DROPBOX_SCOPES,
-        expiresAt,
-      },
-    });
+        update: {
+          encryptedTokens: encryptJson(storedTokens),
+          scopes: token.scope ?? DROPBOX_SCOPES,
+          expiresAt,
+        },
+      });
+    }
 
     return { connected: true };
   }
 
-  async dropboxStatus(userId: string) {
-    const connection = await this.findDropboxConnection(userId);
+  async dropboxStatus(userId: string, organizationId?: string) {
+    const organizationConnection = organizationId
+      ? await this.findOrganizationConnection(
+          organizationId,
+          OrganizationStorageProvider.DROPBOX,
+        )
+      : null;
+    const connection = organizationConnection ?? await this.findDropboxConnection(userId);
     const configured = Boolean(env.DROPBOX_CLIENT_ID && env.DROPBOX_CLIENT_SECRET);
-    const connected = Boolean(connection);
+    const connected = organizationConnection
+      ? organizationConnection.status === OrganizationStorageStatus.CONNECTED &&
+        Boolean(organizationConnection.encryptedTokens)
+      : Boolean(connection);
     return {
       configured,
       connected,
       action: connected ? 'refresh' : configured ? 'connect' : 'configure',
       message: connectorStatusMessage('Dropbox', configured, connected),
-      scopes: connection?.scopes ?? null,
+      scopes:
+        connection && 'scopes' in connection
+          ? connection.scopes ?? null
+          : DROPBOX_SCOPES,
       updatedAt: connection?.updatedAt ?? null,
-      expiresAt: connection?.expiresAt ?? null,
+      expiresAt:
+        connection && 'expiresAt' in connection ? connection.expiresAt ?? null : null,
     };
   }
 
-  async disconnectDropbox(userId: string) {
+  async disconnectDropbox(userId: string, organizationId?: string) {
+    if (organizationId) {
+      await prisma.organizationStorageConnection.updateMany({
+        where: {
+          organizationId,
+          provider: OrganizationStorageProvider.DROPBOX,
+        },
+        data: {
+          status: OrganizationStorageStatus.NOT_CONFIGURED,
+          encryptedTokens: null,
+          disconnectedAt: new Date(),
+        },
+      });
+      return { connected: false };
+    }
     await prisma.oAuthConnection.deleteMany({
       where: { userId, provider: providerValue('DROPBOX') },
     });
     return { connected: false };
   }
 
-  async listDropboxFiles(userId: string, path = '') {
-    const accessToken = await this.getDropboxAccessToken(userId);
+  async listDropboxFiles(userId: string, path = '', organizationId?: string) {
+    const accessToken = await this.getDropboxAccessToken(userId, organizationId);
     const response = await fetch(DROPBOX_LIST_FOLDER_URL, {
       method: 'POST',
       headers: {
@@ -570,11 +796,11 @@ export class IntegrationsService {
     };
   }
 
-  async importDropboxFile(userId: string, dropboxPath: string) {
+  async importDropboxFile(userId: string, dropboxPath: string, organizationId?: string) {
     if (!dropboxPath || !dropboxPath.trim()) {
       throw new AppError('Dropbox file path is required', 400);
     }
-    const accessToken = await this.getDropboxAccessToken(userId);
+    const accessToken = await this.getDropboxAccessToken(userId, organizationId);
     const response = await fetch(DROPBOX_DOWNLOAD_URL, {
       method: 'POST',
       headers: {
@@ -611,14 +837,18 @@ export class IntegrationsService {
     };
   }
 
-  async createDropboxFolder(userId: string, input: CloudFolderInput) {
+  async createDropboxFolder(
+    userId: string,
+    input: CloudFolderInput,
+    organizationId?: string,
+  ) {
     const folderPath = input.path?.trim()
       ? normalizeFolderPath(input.path)
       : normalizeDropboxFilePath(input.name ?? '', '');
     if (!folderPath) {
       throw new AppError('Dropbox folder path is required', 400);
     }
-    const accessToken = await this.getDropboxAccessToken(userId);
+    const accessToken = await this.getDropboxAccessToken(userId, organizationId);
     const response = await fetch(DROPBOX_CREATE_FOLDER_URL, {
       method: 'POST',
       headers: {
@@ -645,7 +875,11 @@ export class IntegrationsService {
     };
   }
 
-  async uploadDropboxFile(userId: string, input: CloudUploadInput) {
+  async uploadDropboxFile(
+    userId: string,
+    input: CloudUploadInput,
+    organizationId?: string,
+  ) {
     const fileName = (input.fileName ?? input.name ?? '').trim();
     const mimeType = input.mimeType?.trim() || mimeTypeForFileName(fileName);
     const buffer = base64ToBuffer(
@@ -656,7 +890,7 @@ export class IntegrationsService {
     const dropboxPath = requestedPath?.startsWith('/') && requestedName === fileName
       ? requestedPath
       : normalizeDropboxFilePath(fileName, requestedPath);
-    const accessToken = await this.getDropboxAccessToken(userId);
+    const accessToken = await this.getDropboxAccessToken(userId, organizationId);
     const response = await fetch(DROPBOX_UPLOAD_URL, {
       method: 'POST',
       headers: {
@@ -693,7 +927,7 @@ export class IntegrationsService {
     };
   }
 
-  googleDriveOAuthUrl(userId: string) {
+  googleDriveOAuthUrl(userId: string, organizationId?: string) {
     if (!env.GOOGLE_DRIVE_CLIENT_ID || !env.GOOGLE_DRIVE_CLIENT_SECRET) {
       return {
         configured: false,
@@ -705,7 +939,7 @@ export class IntegrationsService {
 
     const redirectUri = this.googleDriveRedirectUri();
     const state = jwt.sign(
-      { userId, provider: 'google_drive' },
+      { userId, organizationId, provider: 'google_drive' },
       env.JWT_ACCESS_SECRET,
       { expiresIn: '10m' },
     );
@@ -774,56 +1008,98 @@ export class IntegrationsService {
       expiresAt: expiresAt?.toISOString(),
     };
 
-    await prisma.oAuthConnection.upsert({
-      where: {
-        userId_provider: {
+    if (decoded.organizationId) {
+      await this.storeOrganizationConnection({
+        organizationId: decoded.organizationId,
+        provider: OrganizationStorageProvider.GOOGLE_DRIVE,
+        actorUserId: decoded.userId,
+        encryptedTokens: encryptJson(storedTokens),
+      });
+    } else {
+      await prisma.oAuthConnection.upsert({
+        where: {
+          userId_provider: {
+            userId: decoded.userId,
+            provider: providerValue('GOOGLE_DRIVE'),
+          },
+        },
+        create: {
           userId: decoded.userId,
           provider: providerValue('GOOGLE_DRIVE'),
+          encryptedTokens: encryptJson(storedTokens),
+          scopes: token.scope ?? GOOGLE_DRIVE_SCOPES,
+          expiresAt,
         },
-      },
-      create: {
-        userId: decoded.userId,
-        provider: providerValue('GOOGLE_DRIVE'),
-        encryptedTokens: encryptJson(storedTokens),
-        scopes: token.scope ?? GOOGLE_DRIVE_SCOPES,
-        expiresAt,
-      },
-      update: {
-        encryptedTokens: encryptJson(storedTokens),
-        scopes: token.scope ?? GOOGLE_DRIVE_SCOPES,
-        expiresAt,
-      },
-    });
+        update: {
+          encryptedTokens: encryptJson(storedTokens),
+          scopes: token.scope ?? GOOGLE_DRIVE_SCOPES,
+          expiresAt,
+        },
+      });
+    }
 
     return { connected: true };
   }
 
-  async googleDriveStatus(userId: string) {
-    const connection = await this.findGoogleDriveConnection(userId);
+  async googleDriveStatus(userId: string, organizationId?: string) {
+    const organizationConnection = organizationId
+      ? await this.findOrganizationConnection(
+          organizationId,
+          OrganizationStorageProvider.GOOGLE_DRIVE,
+        )
+      : null;
+    const connection =
+      organizationConnection ?? await this.findGoogleDriveConnection(userId);
     const configured = Boolean(
       env.GOOGLE_DRIVE_CLIENT_ID && env.GOOGLE_DRIVE_CLIENT_SECRET,
     );
-    const connected = Boolean(connection);
+    const connected = organizationConnection
+      ? organizationConnection.status === OrganizationStorageStatus.CONNECTED &&
+        Boolean(organizationConnection.encryptedTokens)
+      : Boolean(connection);
     return {
       configured,
       connected,
       action: connected ? 'refresh' : configured ? 'connect' : 'configure',
       message: connectorStatusMessage('Google Drive', configured, connected),
-      scopes: connection?.scopes ?? null,
+      scopes:
+        connection && 'scopes' in connection
+          ? connection.scopes ?? null
+          : GOOGLE_DRIVE_SCOPES,
       updatedAt: connection?.updatedAt ?? null,
-      expiresAt: connection?.expiresAt ?? null,
+      expiresAt:
+        connection && 'expiresAt' in connection ? connection.expiresAt ?? null : null,
     };
   }
 
-  async disconnectGoogleDrive(userId: string) {
+  async disconnectGoogleDrive(userId: string, organizationId?: string) {
+    if (organizationId) {
+      await prisma.organizationStorageConnection.updateMany({
+        where: {
+          organizationId,
+          provider: OrganizationStorageProvider.GOOGLE_DRIVE,
+        },
+        data: {
+          status: OrganizationStorageStatus.NOT_CONFIGURED,
+          encryptedTokens: null,
+          disconnectedAt: new Date(),
+        },
+      });
+      return { connected: false };
+    }
     await prisma.oAuthConnection.deleteMany({
       where: { userId, provider: providerValue('GOOGLE_DRIVE') },
     });
     return { connected: false };
   }
 
-  async listGoogleDriveFiles(userId: string, parentId = 'root', pageToken?: string) {
-    const accessToken = await this.getGoogleDriveAccessToken(userId);
+  async listGoogleDriveFiles(
+    userId: string,
+    parentId = 'root',
+    pageToken?: string,
+    organizationId?: string,
+  ) {
+    const accessToken = await this.getGoogleDriveAccessToken(userId, organizationId);
     const url = new URL(GOOGLE_DRIVE_FILES_URL);
     url.searchParams.set(
       'q',
@@ -862,12 +1138,16 @@ export class IntegrationsService {
     };
   }
 
-  async createGoogleDriveFolder(userId: string, input: CloudFolderInput) {
+  async createGoogleDriveFolder(
+    userId: string,
+    input: CloudFolderInput,
+    organizationId?: string,
+  ) {
     const name = input.name?.trim();
     if (!name) {
       throw new AppError('Google Drive folder name is required', 400);
     }
-    const accessToken = await this.getGoogleDriveAccessToken(userId);
+    const accessToken = await this.getGoogleDriveAccessToken(userId, organizationId);
     const response = await fetch(GOOGLE_DRIVE_FILES_URL, {
       method: 'POST',
       headers: {
@@ -897,7 +1177,11 @@ export class IntegrationsService {
     };
   }
 
-  async uploadGoogleDriveFile(userId: string, input: CloudUploadInput) {
+  async uploadGoogleDriveFile(
+    userId: string,
+    input: CloudUploadInput,
+    organizationId?: string,
+  ) {
     const fileName = (input.fileName ?? input.name ?? '').trim();
     if (!fileName) {
       throw new AppError('File name is required', 400);
@@ -906,7 +1190,7 @@ export class IntegrationsService {
     const buffer = base64ToBuffer(
       input.contentBase64 ?? input.dataBase64 ?? input.content,
     );
-    const accessToken = await this.getGoogleDriveAccessToken(userId);
+    const accessToken = await this.getGoogleDriveAccessToken(userId, organizationId);
     const boundary = `softlogic_${randomBytes(12).toString('hex')}`;
     const metadata = {
       name: fileName,
@@ -959,12 +1243,17 @@ export class IntegrationsService {
     };
   }
 
-  async importGoogleDriveFile(userId: string, fileId: string, fileName?: string) {
+  async importGoogleDriveFile(
+    userId: string,
+    fileId: string,
+    fileName?: string,
+    organizationId?: string,
+  ) {
     const normalizedFileId = fileId.trim();
     if (!normalizedFileId) {
       throw new AppError('Google Drive file id is required', 400);
     }
-    const accessToken = await this.getGoogleDriveAccessToken(userId);
+    const accessToken = await this.getGoogleDriveAccessToken(userId, organizationId);
     const metadataResponse = await fetch(
       `${GOOGLE_DRIVE_FILES_URL}/${encodeURIComponent(normalizedFileId)}?fields=id,name,mimeType,size`,
       { headers: { Authorization: `Bearer ${accessToken}` } },
@@ -999,6 +1288,295 @@ export class IntegrationsService {
       ...stored,
       googleDriveFileId: normalizedFileId,
     };
+  }
+
+  oneDriveOAuthUrl(userId: string, organizationId: string) {
+    if (!env.ONEDRIVE_CLIENT_ID || !env.ONEDRIVE_CLIENT_SECRET) {
+      return {
+        configured: false,
+        authUrl: null,
+        message: 'OneDrive OAuth is not configured.',
+        action: 'configure',
+      };
+    }
+    const state = jwt.sign(
+      { userId, organizationId, provider: 'onedrive' },
+      env.JWT_ACCESS_SECRET,
+      { expiresIn: '10m' },
+    );
+    const url = new URL(ONEDRIVE_AUTH_URL);
+    url.searchParams.set('client_id', env.ONEDRIVE_CLIENT_ID);
+    url.searchParams.set('response_type', 'code');
+    url.searchParams.set('redirect_uri', this.oneDriveRedirectUri());
+    url.searchParams.set('response_mode', 'query');
+    url.searchParams.set('scope', ONEDRIVE_SCOPES);
+    url.searchParams.set('state', state);
+    return {
+      configured: true,
+      authUrl: url.toString(),
+      message: 'Open this URL to connect OneDrive.',
+      action: 'connect',
+    };
+  }
+
+  async handleOneDriveCallback(input: {
+    code?: string;
+    state?: string;
+    error?: string;
+  }) {
+    if (input.error) {
+      throw new AppError(`OneDrive authorization failed: ${input.error}`, 400);
+    }
+    if (!input.code || !input.state) {
+      throw new AppError('OneDrive callback is missing code or state', 400);
+    }
+    if (!env.ONEDRIVE_CLIENT_ID || !env.ONEDRIVE_CLIENT_SECRET) {
+      throw new AppError('OneDrive OAuth is not configured.', 400);
+    }
+    const decoded = jwt.verify(
+      input.state,
+      env.JWT_ACCESS_SECRET,
+    ) as OneDriveStatePayload;
+    if (
+      decoded.provider !== 'onedrive' ||
+      !decoded.userId ||
+      !decoded.organizationId
+    ) {
+      throw new AppError('Invalid OneDrive OAuth state', 400);
+    }
+    const response = await fetch(ONEDRIVE_TOKEN_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        client_id: env.ONEDRIVE_CLIENT_ID,
+        client_secret: env.ONEDRIVE_CLIENT_SECRET,
+        code: input.code,
+        redirect_uri: this.oneDriveRedirectUri(),
+        grant_type: 'authorization_code',
+        scope: ONEDRIVE_SCOPES,
+      }),
+    });
+    if (!response.ok) {
+      throw new AppError('OneDrive token exchange failed', response.status);
+    }
+    const token = await response.json() as OneDriveTokenResponse;
+    const expiresAt = token.expires_in
+      ? new Date(Date.now() + token.expires_in * 1000)
+      : undefined;
+    const storedTokens: OneDriveStoredTokens = {
+      accessToken: token.access_token,
+      refreshToken: token.refresh_token,
+      tokenType: token.token_type,
+      expiresAt: expiresAt?.toISOString(),
+    };
+    let externalAccountEmail: string | null = null;
+    const profileResponse = await fetch(`${ONEDRIVE_GRAPH_URL}/me?$select=mail,userPrincipalName`, {
+      headers: { Authorization: `Bearer ${token.access_token}` },
+    });
+    if (profileResponse.ok) {
+      const profile = await profileResponse.json() as {
+        mail?: string;
+        userPrincipalName?: string;
+      };
+      externalAccountEmail = profile.mail ?? profile.userPrincipalName ?? null;
+    }
+    await this.storeOrganizationConnection({
+      organizationId: decoded.organizationId,
+      provider: OrganizationStorageProvider.ONEDRIVE,
+      actorUserId: decoded.userId,
+      encryptedTokens: encryptJson(storedTokens),
+      externalAccountEmail,
+    });
+    return { connected: true };
+  }
+
+  async oneDriveStatus(organizationId: string) {
+    const connection = await this.findOrganizationConnection(
+      organizationId,
+      OrganizationStorageProvider.ONEDRIVE,
+    );
+    const configured = Boolean(
+      env.ONEDRIVE_CLIENT_ID && env.ONEDRIVE_CLIENT_SECRET,
+    );
+    const connected =
+      connection?.status === OrganizationStorageStatus.CONNECTED &&
+      Boolean(connection.encryptedTokens);
+    return {
+      configured,
+      connected,
+      action: connected ? 'refresh' : configured ? 'connect' : 'configure',
+      message: connectorStatusMessage('OneDrive', configured, connected),
+      scopes: ONEDRIVE_SCOPES,
+      updatedAt: connection?.updatedAt ?? null,
+      externalAccountEmail: connection?.externalAccountEmail ?? null,
+    };
+  }
+
+  async disconnectOneDrive(organizationId: string) {
+    await prisma.organizationStorageConnection.updateMany({
+      where: {
+        organizationId,
+        provider: OrganizationStorageProvider.ONEDRIVE,
+      },
+      data: {
+        status: OrganizationStorageStatus.NOT_CONFIGURED,
+        encryptedTokens: null,
+        disconnectedAt: new Date(),
+      },
+    });
+    return { connected: false };
+  }
+
+  async listOneDriveFiles(
+    organizationId: string,
+    parentId = 'root',
+  ) {
+    const accessToken = await this.getOneDriveAccessToken(organizationId);
+    const resource = parentId === 'root'
+      ? '/me/drive/root/children'
+      : `/me/drive/items/${encodeURIComponent(parentId)}/children`;
+    const response = await fetch(
+      `${ONEDRIVE_GRAPH_URL}${resource}?$select=id,name,size,lastModifiedDateTime,folder,file,webUrl&$top=200`,
+      { headers: { Authorization: `Bearer ${accessToken}` } },
+    );
+    if (!response.ok) {
+      throw connectorError('OneDrive', 'file list', response.status);
+    }
+    const payload = await response.json() as { value?: OneDriveItem[] };
+    return {
+      parentId,
+      entries: (payload.value ?? []).map((item) => ({
+        id: item.id ?? '',
+        name: item.name ?? 'Untitled',
+        path: item.id ?? '',
+        type: item.folder ? 'folder' : 'file',
+        mimeType: item.file?.mimeType ?? null,
+        sizeBytes: item.size ?? null,
+        modifiedAt: item.lastModifiedDateTime ?? null,
+        webViewLink: item.webUrl ?? null,
+      })),
+      hasMore: false,
+      cursor: null,
+    };
+  }
+
+  async createOneDriveFolder(
+    organizationId: string,
+    input: CloudFolderInput,
+  ) {
+    const name = input.name?.trim();
+    if (!name) {
+      throw new AppError('OneDrive folder name is required', 400);
+    }
+    const accessToken = await this.getOneDriveAccessToken(organizationId);
+    const parentId = input.parentId?.trim() || 'root';
+    const resource = parentId === 'root'
+      ? '/me/drive/root/children'
+      : `/me/drive/items/${encodeURIComponent(parentId)}/children`;
+    const response = await fetch(`${ONEDRIVE_GRAPH_URL}${resource}`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        name,
+        folder: {},
+        '@microsoft.graph.conflictBehavior': 'rename',
+      }),
+    });
+    if (!response.ok) {
+      throw connectorError('OneDrive', 'folder creation', response.status);
+    }
+    const item = await response.json() as OneDriveItem;
+    return {
+      id: item.id ?? null,
+      name: item.name ?? name,
+      path: item.id ?? '',
+      type: 'folder',
+    };
+  }
+
+  async uploadOneDriveFile(
+    organizationId: string,
+    input: CloudUploadInput,
+  ) {
+    const fileName = (input.fileName ?? input.name ?? '').trim();
+    if (!fileName) {
+      throw new AppError('File name is required', 400);
+    }
+    const buffer = base64ToBuffer(
+      input.contentBase64 ?? input.dataBase64 ?? input.content,
+    );
+    const parentId = input.parentId?.trim() || 'root';
+    const accessToken = await this.getOneDriveAccessToken(organizationId);
+    const safeName = encodeURIComponent(fileName);
+    const resource = parentId === 'root'
+      ? `/me/drive/root:/${safeName}:/content`
+      : `/me/drive/items/${encodeURIComponent(parentId)}:/${safeName}:/content`;
+    const response = await fetch(`${ONEDRIVE_GRAPH_URL}${resource}`, {
+      method: 'PUT',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': input.mimeType?.trim() || mimeTypeForFileName(fileName),
+      },
+      body: buffer,
+    });
+    if (!response.ok) {
+      throw connectorError('OneDrive', 'file upload', response.status);
+    }
+    const item = await response.json() as OneDriveItem;
+    return {
+      id: item.id ?? null,
+      name: item.name ?? fileName,
+      path: item.id ?? '',
+      type: 'file',
+      mimeType: item.file?.mimeType ?? input.mimeType ?? mimeTypeForFileName(fileName),
+      sizeBytes: item.size ?? buffer.length,
+      modifiedAt: item.lastModifiedDateTime ?? null,
+      webViewLink: item.webUrl ?? null,
+    };
+  }
+
+  async importOneDriveFile(
+    organizationId: string,
+    itemId: string,
+    fileName?: string,
+  ) {
+    const normalizedId = itemId.trim();
+    if (!normalizedId) {
+      throw new AppError('OneDrive file id is required', 400);
+    }
+    const accessToken = await this.getOneDriveAccessToken(organizationId);
+    const metadataResponse = await fetch(
+      `${ONEDRIVE_GRAPH_URL}/me/drive/items/${encodeURIComponent(normalizedId)}?$select=id,name,size,file,folder`,
+      { headers: { Authorization: `Bearer ${accessToken}` } },
+    );
+    if (!metadataResponse.ok) {
+      throw connectorError('OneDrive', 'metadata lookup', metadataResponse.status);
+    }
+    const metadata = await metadataResponse.json() as OneDriveItem;
+    if (metadata.folder) {
+      throw new AppError('OneDrive folders cannot be imported as files', 400);
+    }
+    const response = await fetch(
+      `${ONEDRIVE_GRAPH_URL}/me/drive/items/${encodeURIComponent(normalizedId)}/content`,
+      { headers: { Authorization: `Bearer ${accessToken}` } },
+    );
+    if (!response.ok) {
+      throw connectorError('OneDrive', 'file download', response.status);
+    }
+    const resolvedName = fileName?.trim() || metadata.name || 'onedrive-file';
+    const buffer = Buffer.from(await response.arrayBuffer());
+    const stored = await fileStorageService.storeFile(
+      `onedrive/${organizationId}`,
+      multerFileFromBuffer(
+        resolvedName,
+        metadata.file?.mimeType ?? mimeTypeForFileName(resolvedName),
+        buffer,
+      ),
+    );
+    return { ...stored, oneDriveItemId: normalizedId };
   }
 
   webPortalStatus(userId: string) {
@@ -1220,9 +1798,28 @@ export class IntegrationsService {
     );
   }
 
-  private async getDropboxAccessToken(userId: string): Promise<string> {
-    const connection = await this.findDropboxConnection(userId);
+  private oneDriveRedirectUri(): string {
+    return (
+      env.ONEDRIVE_REDIRECT_URI ??
+      `${env.PUBLIC_APP_URL.replace(/\/$/, '')}/oauth/onedrive/callback`
+    );
+  }
+
+  private async getDropboxAccessToken(
+    userId: string,
+    organizationId?: string,
+  ): Promise<string> {
+    const organizationConnection = organizationId
+      ? await this.findOrganizationConnection(
+          organizationId,
+          OrganizationStorageProvider.DROPBOX,
+        )
+      : null;
+    const connection = organizationConnection ?? await this.findDropboxConnection(userId);
     if (!connection) {
+      throw new AppError('Dropbox is not connected', 400);
+    }
+    if (!connection.encryptedTokens) {
       throw new AppError('Dropbox is not connected', 400);
     }
     const tokens = decryptJson<DropboxStoredTokens>(connection.encryptedTokens);
@@ -1256,24 +1853,49 @@ export class IntegrationsService {
       tokenType: refreshed.token_type ?? tokens.tokenType,
       expiresAt: expiresAt?.toISOString(),
     };
-    await prisma.oAuthConnection.update({
-      where: {
-        userId_provider: {
-          userId,
-          provider: providerValue('DROPBOX'),
+    if (organizationConnection && organizationId) {
+      await prisma.organizationStorageConnection.update({
+        where: {
+          organizationId_provider: {
+            organizationId,
+            provider: OrganizationStorageProvider.DROPBOX,
+          },
         },
-      },
-      data: {
-        encryptedTokens: encryptJson(updatedTokens),
-        expiresAt,
-      },
-    });
+        data: { encryptedTokens: encryptJson(updatedTokens), validatedAt: new Date() },
+      });
+    } else {
+      await prisma.oAuthConnection.update({
+        where: {
+          userId_provider: {
+            userId,
+            provider: providerValue('DROPBOX'),
+          },
+        },
+        data: {
+          encryptedTokens: encryptJson(updatedTokens),
+          expiresAt,
+        },
+      });
+    }
     return refreshed.access_token;
   }
 
-  private async getGoogleDriveAccessToken(userId: string): Promise<string> {
-    const connection = await this.findGoogleDriveConnection(userId);
+  private async getGoogleDriveAccessToken(
+    userId: string,
+    organizationId?: string,
+  ): Promise<string> {
+    const organizationConnection = organizationId
+      ? await this.findOrganizationConnection(
+          organizationId,
+          OrganizationStorageProvider.GOOGLE_DRIVE,
+        )
+      : null;
+    const connection =
+      organizationConnection ?? await this.findGoogleDriveConnection(userId);
     if (!connection) {
+      throw new AppError('Google Drive is not connected', 400);
+    }
+    if (!connection.encryptedTokens) {
       throw new AppError('Google Drive is not connected', 400);
     }
     const tokens = decryptJson<GoogleDriveStoredTokens>(connection.encryptedTokens);
@@ -1311,16 +1933,94 @@ export class IntegrationsService {
       tokenType: refreshed.token_type ?? tokens.tokenType,
       expiresAt: expiresAt?.toISOString(),
     };
-    await prisma.oAuthConnection.update({
+    if (organizationConnection && organizationId) {
+      await prisma.organizationStorageConnection.update({
+        where: {
+          organizationId_provider: {
+            organizationId,
+            provider: OrganizationStorageProvider.GOOGLE_DRIVE,
+          },
+        },
+        data: { encryptedTokens: encryptJson(updatedTokens), validatedAt: new Date() },
+      });
+    } else {
+      await prisma.oAuthConnection.update({
+        where: {
+          userId_provider: {
+            userId,
+            provider: providerValue('GOOGLE_DRIVE'),
+          },
+        },
+        data: {
+          encryptedTokens: encryptJson(updatedTokens),
+          expiresAt,
+        },
+      });
+    }
+    return refreshed.access_token;
+  }
+
+  private async getOneDriveAccessToken(organizationId: string): Promise<string> {
+    const connection = await this.findOrganizationConnection(
+      organizationId,
+      OrganizationStorageProvider.ONEDRIVE,
+    );
+    if (
+      !connection ||
+      connection.status !== OrganizationStorageStatus.CONNECTED ||
+      !connection.encryptedTokens
+    ) {
+      throw new AppError('OneDrive is not connected', 400);
+    }
+    const tokens = decryptJson<OneDriveStoredTokens>(connection.encryptedTokens);
+    if (
+      !tokens.expiresAt ||
+      new Date(tokens.expiresAt).getTime() > Date.now() + 60_000
+    ) {
+      return tokens.accessToken;
+    }
+    if (
+      !tokens.refreshToken ||
+      !env.ONEDRIVE_CLIENT_ID ||
+      !env.ONEDRIVE_CLIENT_SECRET
+    ) {
+      throw new AppError('OneDrive token is expired. Please reconnect OneDrive.', 401);
+    }
+    const response = await fetch(ONEDRIVE_TOKEN_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        client_id: env.ONEDRIVE_CLIENT_ID,
+        client_secret: env.ONEDRIVE_CLIENT_SECRET,
+        refresh_token: tokens.refreshToken,
+        grant_type: 'refresh_token',
+        scope: ONEDRIVE_SCOPES,
+      }),
+    });
+    if (!response.ok) {
+      throw connectorTokenRefreshError('OneDrive', response.status);
+    }
+    const refreshed = await response.json() as OneDriveTokenResponse;
+    const expiresAt = refreshed.expires_in
+      ? new Date(Date.now() + refreshed.expires_in * 1000)
+      : undefined;
+    const updatedTokens: OneDriveStoredTokens = {
+      ...tokens,
+      accessToken: refreshed.access_token,
+      refreshToken: refreshed.refresh_token ?? tokens.refreshToken,
+      tokenType: refreshed.token_type ?? tokens.tokenType,
+      expiresAt: expiresAt?.toISOString(),
+    };
+    await prisma.organizationStorageConnection.update({
       where: {
-        userId_provider: {
-          userId,
-          provider: providerValue('GOOGLE_DRIVE'),
+        organizationId_provider: {
+          organizationId,
+          provider: OrganizationStorageProvider.ONEDRIVE,
         },
       },
       data: {
         encryptedTokens: encryptJson(updatedTokens),
-        expiresAt,
+        validatedAt: new Date(),
       },
     });
     return refreshed.access_token;

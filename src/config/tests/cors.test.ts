@@ -5,6 +5,15 @@ import { createApp } from '@/app';
 describe('CORS', () => {
   const app = createApp();
 
+  it('trusts forwarded client IPs from the local reverse proxy', async () => {
+    const response = await request(app)
+      .get('/api/health')
+      .set('X-Forwarded-For', '203.0.113.10');
+
+    expect(response.status).toBe(200);
+    expect(response.body.status).toBe('ok');
+  });
+
   it('allows the local Vite admin panel to preflight admin auth requests', async () => {
     const response = await request(app)
       .options('/api/v1/auth/admin/login')

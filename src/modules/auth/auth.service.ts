@@ -565,11 +565,9 @@ export class AuthService {
 
     try {
       const idToken = await this.exchangeGoogleCodeForIdToken(code.trim());
-      const session = await this.googleSignIn(
-        idToken,
-        ipAddress,
-        params.deviceInfo,
-      );
+      const session = params.deviceInfo
+        ? await this.googleSignIn(idToken, ipAddress, params.deviceInfo)
+        : await this.googleSignIn(idToken, ipAddress);
 
       await authRepository.updateGoogleDesktopAuthAttempt(attempt.id, {
         completedAt: new Date(),

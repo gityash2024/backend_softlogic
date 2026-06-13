@@ -1,5 +1,6 @@
 import {
   OrganizationKind,
+  OrganizationStorageProvider,
   OrganizationStatus,
   UserRole,
   UserStatus,
@@ -40,8 +41,8 @@ const buildUserContextRecord = (
     subscriptions: [],
   }) as unknown as UserContextRecord;
 
-describe('toSafeUserContext organization AI settings', () => {
-  it('maps canonical Gemini model fields from organization settings', () => {
+describe('toSafeUserContext organization settings', () => {
+  it('does not expose canonical organization AI secrets', () => {
     const context = toSafeUserContext(
       buildUserContextRecord({
         ai: {
@@ -55,17 +56,10 @@ describe('toSafeUserContext organization AI settings', () => {
       }),
     );
 
-    expect(context.primaryOrganization?.aiSettings).toMatchObject({
-      geminiApiKey: 'gemini-key',
-      geminiApiKeys: ['gemini-key', 'gemini-key-2'],
-      geminiTextModel: 'gemini-2.5-flash',
-      geminiImageModel: 'imagen-4.0-generate-001',
-      geminiTtsModel: 'gemini-2.5-flash-preview-tts',
-      deepgramApiKey: 'deepgram-key',
-    });
+    expect(context.primaryOrganization?.aiSettings).toBeNull();
   });
 
-  it('maps legacy textModel/imageModel/ttsModel fields for existing organizations', () => {
+  it('does not expose legacy organization AI secrets', () => {
     const context = toSafeUserContext(
       buildUserContextRecord({
         ai: {
@@ -78,19 +72,16 @@ describe('toSafeUserContext organization AI settings', () => {
       }),
     );
 
-    expect(context.primaryOrganization?.aiSettings).toMatchObject({
-      geminiApiKey: 'legacy-key',
-      geminiApiKeys: ['legacy-key'],
-      geminiTextModel: 'gemini-2.0-flash',
-      geminiImageModel: 'gemini-2.5-flash-image',
-      geminiTtsModel: 'gemini-2.5-pro-preview-tts',
-      deepgramApiKey: 'legacy-deepgram',
-    });
+    expect(context.primaryOrganization?.aiSettings).toBeNull();
   });
 
-  it('returns null when AI settings are empty', () => {
+  it('returns all remote providers for the internal organization', () => {
     const context = toSafeUserContext(buildUserContextRecord({ ai: {} }));
 
-    expect(context.primaryOrganization?.aiSettings).toBeNull();
+    expect(context.primaryOrganization?.storageProviders).toEqual([
+      OrganizationStorageProvider.GOOGLE_DRIVE,
+      OrganizationStorageProvider.DROPBOX,
+      OrganizationStorageProvider.ONEDRIVE,
+    ]);
   });
 });

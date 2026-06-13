@@ -40,6 +40,10 @@ export const createApp = (): express.Application => {
   const app = express();
   const apiPrefix = '/api/v1';
 
+  // Both deployments terminate TLS in a local Nginx reverse proxy.
+  // Trust only loopback proxies so rate limiting uses the real client IP.
+  app.set('trust proxy', 'loopback');
+
   // ─── Security ─────────────────────────────
   app.use(helmet());
   app.use(cors(corsConfig));
@@ -104,6 +108,9 @@ export const createApp = (): express.Application => {
   });
   app.get('/oauth/google-drive/callback', (req, res, next) => {
     void integrationsController.googleDriveCallback(req, res, next);
+  });
+  app.get('/oauth/onedrive/callback', (req, res, next) => {
+    void integrationsController.oneDriveCallback(req, res, next);
   });
 
   // ─── Phase 1 Routes ───────────────────────

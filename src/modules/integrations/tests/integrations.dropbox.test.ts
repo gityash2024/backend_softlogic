@@ -14,6 +14,9 @@ jest.mock('@/config', () => ({
     GOOGLE_DRIVE_CLIENT_ID: 'google-drive-client-id',
     GOOGLE_DRIVE_CLIENT_SECRET: 'google-drive-client-secret',
     GOOGLE_DRIVE_REDIRECT_URI: 'https://app.example.com/oauth/google-drive/callback',
+    ONEDRIVE_CLIENT_ID: 'onedrive-client-id',
+    ONEDRIVE_CLIENT_SECRET: 'onedrive-client-secret',
+    ONEDRIVE_REDIRECT_URI: 'https://app.example.com/oauth/onedrive/callback',
   },
   prisma: {
     oAuthConnection: {
@@ -21,6 +24,11 @@ jest.mock('@/config', () => ({
       upsert: jest.fn(),
       deleteMany: jest.fn(),
       update: jest.fn(),
+    },
+    organizationStorageConnection: {
+      findUnique: jest.fn(),
+      upsert: jest.fn(),
+      updateMany: jest.fn(),
     },
     lmsConnection: {
       findMany: jest.fn(),
@@ -50,6 +58,11 @@ const mockedPrisma = prisma as unknown as {
     upsert: jest.Mock;
     deleteMany: jest.Mock;
     update: jest.Mock;
+  };
+  organizationStorageConnection: {
+    findUnique: jest.Mock;
+    upsert: jest.Mock;
+    updateMany: jest.Mock;
   };
   canvas: {
     findMany: jest.Mock;
@@ -455,5 +468,37 @@ describe('IntegrationsService Dropbox', () => {
         mimetype: mimeType,
       }),
     );
+  });
+});
+
+describe('IntegrationsService OneDrive', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('creates an organization-scoped Microsoft OAuth URL', () => {
+    const result = integrationsService.oneDriveOAuthUrl('user-1', 'org-1');
+
+    expect(result.configured).toBe(true);
+    const url = new URL(result.authUrl!);
+    expect(url.origin + url.pathname).toBe(
+      'https://login.microsoftonline.com/common/oauth2/v2.0/authorize',
+    );
+    expect(url.searchParams.get('client_id')).toBe('onedrive-client-id');
+    expect(url.searchParams.get('redirect_uri')).toBe(
+      'https://app.example.com/oauth/onedrive/callback',
+    );
+    expect(url.searchParams.get('scope')).toContain('Files.ReadWrite');
+  });
+
+  it('returns an actionable disconnected OneDrive status', async () => {
+    mockedPrisma.organizationStorageConnection.findUnique.mockResolvedValue(null);
+
+    await expect(integrationsService.oneDriveStatus('org-1')).resolves.toMatchObject({
+      configured: true,
+      connected: false,
+      action: 'connect',
+      message: 'Connect your OneDrive account.',
+    });
   });
 });
