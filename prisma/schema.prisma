@@ -91,6 +91,21 @@ enum UserStatus {
   DISABLED
 }
 
+enum AppReleaseEnvironment {
+  STAGING
+  PRODUCTION
+}
+
+enum AppReleaseBrand {
+  SOFTLOGIC
+  AI_SMART_BOARD
+}
+
+enum AppReleasePlatform {
+  ANDROID
+  WINDOWS
+}
+
 model Organization {
   id                     String                        @id @default(uuid())
   name                   String
@@ -503,6 +518,26 @@ model AdminAuditLog {
 
   @@index([actorUserId])
   @@map("admin_audit_logs")
+}
+
+model AppRelease {
+  id          String               @id @default(uuid())
+  environment AppReleaseEnvironment
+  brand       AppReleaseBrand
+  platform    AppReleasePlatform
+  versionName String
+  buildNumber Int
+  releaseDate DateTime
+  notes       String?
+  downloadUrl String
+  isCurrent   Boolean              @default(false)
+  isActive    Boolean              @default(true)
+  createdAt   DateTime             @default(now())
+  updatedAt   DateTime             @updatedAt
+
+  @@unique([environment, brand, platform, buildNumber])
+  @@index([environment, brand, platform, isCurrent, isActive])
+  @@map("app_releases")
 }
 
 model OrganizationStorageConnection {

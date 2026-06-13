@@ -7,6 +7,7 @@ import {
   listUsersQuerySchema,
   updateOrganizationSchema,
 } from '../admin.validator';
+import { publishFullAppReleaseSchema } from '@/modules/app-updates/app-update.validator';
 
 describe('admin organization validator', () => {
   it('allows organisation AI settings updates', () => {
@@ -141,6 +142,39 @@ describe('admin organization validator', () => {
       bulkCreateHardwareActivationKeysSchema.safeParse({
         organizationId: '00000000-0000-0000-0000-000000000001',
         keys: [{ label: 'Lab board 1', maxDevices: 2 }],
+      }).success,
+    ).toBe(false);
+  });
+
+  it('requires all 8 app release links for a full release publish', () => {
+    const completeArtifacts = (['staging', 'production'] as const).flatMap(
+      (environment) =>
+        (['softlogic', 'ai_smart_board'] as const).flatMap((brand) =>
+          (['android', 'windows'] as const).map((platform) => ({
+            environment,
+            brand,
+            platform,
+            downloadUrl: `https://drive.google.com/file/d/${environment}-${brand}-${platform}/view?usp=sharing`,
+          })),
+        ),
+    );
+
+    expect(
+      publishFullAppReleaseSchema.safeParse({
+        versionName: '1.0.20',
+        buildNumber: 21,
+        releaseDate: '2026-06-13',
+        notes: 'Release notes',
+        artifacts: completeArtifacts,
+      }).success,
+    ).toBe(true);
+
+    expect(
+      publishFullAppReleaseSchema.safeParse({
+        versionName: '1.0.20',
+        buildNumber: 21,
+        releaseDate: '2026-06-13',
+        artifacts: completeArtifacts.slice(0, 7),
       }).success,
     ).toBe(false);
   });

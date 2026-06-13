@@ -1,15 +1,15 @@
 export const appVersionMetadata = {
   productName: 'Softlogic Whiteboard',
   backendName: 'softlogic-whiteboard-backend',
-  release: 'v1.0.19',
-  version: '1.0.19',
-  build: 20,
+  release: 'v1.0.20',
+  version: '1.0.20',
+  build: 21,
   apiVersion: 'v1',
   releaseDate: '2026-06-13',
   flutter: {
-    version: '1.0.19',
-    buildNumber: 20,
-    buildName: '1.0.19+20',
+    version: '1.0.20',
+    buildNumber: 21,
+    buildName: '1.0.20+21',
   },
 } as const;
 

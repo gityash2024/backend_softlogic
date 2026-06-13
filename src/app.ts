@@ -29,6 +29,7 @@ import { feedbackRoutes } from './modules/feedback/feedback.routes';
 import { organizationsRoutes } from './modules/organizations/organizations.routes';
 import { supportRoutes } from './modules/support/support.routes';
 import { aiRoutes } from './modules/ai/ai.routes';
+import { appUpdateRoutes } from './modules/app-updates/app-update.routes';
 import {
   chatRoutes,
   assessmentsRoutes,
@@ -121,6 +122,7 @@ export const createApp = (): express.Application => {
   app.use(`${apiPrefix}/export`, exportRoutes);
   app.use(`${apiPrefix}/users/me/settings`, settingsRoutes);
   app.use(`${apiPrefix}/filter`, filterRoutes);
+  app.use(`${apiPrefix}/app-updates`, appUpdateRoutes);
   app.use(`${apiPrefix}/admin`, adminRoutes);
   app.use(`${apiPrefix}/license`, licensingRoutes);
   app.use(`${apiPrefix}/organizations`, organizationsRoutes);

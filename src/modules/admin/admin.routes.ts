@@ -4,6 +4,13 @@ import { uploadSingle } from '@/shared/middleware/upload.middleware';
 import { validate } from '@/shared/middleware/validation.middleware';
 import { adminController } from './admin.controller';
 import { adminAiRoutes } from '@/modules/ai/ai.routes';
+import { appUpdateController } from '@/modules/app-updates/app-update.controller';
+import {
+  listAppReleasesQuerySchema,
+  publishFullAppReleaseSchema,
+  updateAppReleaseParamsSchema,
+  updateAppReleaseSchema,
+} from '@/modules/app-updates/app-update.validator';
 import {
   bulkCreateHardwareActivationKeysSchema,
   bulkInviteSchema,
@@ -47,6 +54,26 @@ router.use(roleGuard('SUPER_ADMIN', 'PARTNER_ADMIN', 'CUSTOMER_ADMIN', 'ADMIN'))
 
 router.get('/dashboard', adminController.dashboard);
 router.use('/ai', adminAiRoutes);
+
+router.get(
+  '/app-releases',
+  roleGuard('SUPER_ADMIN'),
+  validate(listAppReleasesQuerySchema, 'query'),
+  appUpdateController.listReleases,
+);
+router.post(
+  '/app-releases/full-release',
+  roleGuard('SUPER_ADMIN'),
+  validate(publishFullAppReleaseSchema),
+  appUpdateController.publishFullRelease,
+);
+router.patch(
+  '/app-releases/:id',
+  roleGuard('SUPER_ADMIN'),
+  validate(updateAppReleaseParamsSchema, 'params'),
+  validate(updateAppReleaseSchema),
+  appUpdateController.updateRelease,
+);
 
 router.get('/organizations', validate(listOrganizationsQuerySchema, 'query'), adminController.listOrganizations);
 router.get('/organizations/export', validate(listOrganizationsQuerySchema.merge(exportQuerySchema), 'query'), adminController.exportOrganizations);
