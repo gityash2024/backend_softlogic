@@ -118,10 +118,54 @@ describe('email provider selection', () => {
     const [, request] = (global.fetch as jest.Mock).mock.calls[0];
     const body = JSON.parse(request.body);
     expect(body.htmlContent).toContain(
-      'src="https://api.softlogic.test/email-assets/softlogic-logo.png"',
+      'src="https://api.softlogic.test/api/email-assets/softlogic-logo.png"',
     );
     expect(body.htmlContent).not.toContain('cid:softlogic-logo');
     expect(body.attachment).toBeUndefined();
+  });
+
+  it('falls back to the AWS API origin for production SoftLogic emails when no backend URL is set', async () => {
+    const { getOtpEmailHtml, sendEmail } = await loadEmailModule({
+      EMAIL_PROVIDER: 'brevo',
+      BREVO_API_KEY: 'brevo-secret',
+      NODE_ENV: 'production',
+      PUBLIC_ADMIN_URL: 'https://ai.softeractive.com',
+      PUBLIC_BACKEND_URL: undefined,
+    });
+
+    await sendEmail({
+      to: 'teacher@example.com',
+      subject: 'Your SoftLogic code',
+      html: getOtpEmailHtml('1234'),
+    });
+
+    const [, request] = (global.fetch as jest.Mock).mock.calls[0];
+    const body = JSON.parse(request.body);
+    expect(body.htmlContent).toContain(
+      'src="https://api.softeractive.com/api/email-assets/softlogic-logo.png"',
+    );
+  });
+
+  it('falls back to the staging API origin from the Vercel UAT admin URL even in development mode', async () => {
+    const { getOtpEmailHtml, sendEmail } = await loadEmailModule({
+      EMAIL_PROVIDER: 'brevo',
+      BREVO_API_KEY: 'brevo-secret',
+      NODE_ENV: 'development',
+      PUBLIC_ADMIN_URL: 'https://adminpanelsoftlogic.vercel.app',
+      PUBLIC_BACKEND_URL: undefined,
+    });
+
+    await sendEmail({
+      to: 'teacher@example.com',
+      subject: 'Your SoftLogic code',
+      html: getOtpEmailHtml('1234'),
+    });
+
+    const [, request] = (global.fetch as jest.Mock).mock.calls[0];
+    const body = JSON.parse(request.body);
+    expect(body.htmlContent).toContain(
+      'src="https://softlogic-api.mymultimeds.com/api/email-assets/softlogic-logo.png"',
+    );
   });
 
   it('keeps AI Smart Board emails badge-only with no SoftLogic logo attachment', async () => {
@@ -151,7 +195,7 @@ describe('email provider selection', () => {
     expect(body.subject).toBe('Your AI Smart Board code');
     expect(body.htmlContent).toContain('AI Smart Board');
     expect(body.htmlContent).not.toContain('softlogic-logo');
-    expect(body.htmlContent).not.toContain('/email-assets/softlogic-logo.png');
+    expect(body.htmlContent).not.toContain('softlogic-logo.png');
     expect(body.attachment).toBeUndefined();
   });
 

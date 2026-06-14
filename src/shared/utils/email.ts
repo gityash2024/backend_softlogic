@@ -9,7 +9,7 @@ import { env } from '@/config';
 
 const BRAND_LOGO_CID = 'softlogic-logo';
 const BRAND_LOGO_FILENAME = 'softlogic-logo.png';
-const BRAND_LOGO_ASSET_PATH = '/email-assets/softlogic-logo.png';
+const BRAND_LOGO_ASSET_PATH = '/api/email-assets/softlogic-logo.png';
 const WHITE_LABEL_EMAIL_BRAND = 'AI Smart Board';
 
 export type EmailBrand = 'SOFTLOGIC' | 'AI_SMART_BOARD';
@@ -242,8 +242,24 @@ export const getBrandLogoEmailAttachments = (): Mail.Attachment[] => {
   ];
 };
 
+const getBackendOriginForEmailAssets = (): string => {
+  if (env.PUBLIC_BACKEND_URL?.trim()) {
+    return env.PUBLIC_BACKEND_URL.trim().replace(/\/+$/, '');
+  }
+
+  const publicAdminUrl = env.PUBLIC_ADMIN_URL.replace(/\/+$/, '');
+  if (publicAdminUrl === 'https://ai.softeractive.com') {
+    return 'https://api.softeractive.com';
+  }
+  if (publicAdminUrl === 'https://adminpanelsoftlogic.vercel.app') {
+    return 'https://softlogic-api.mymultimeds.com';
+  }
+
+  return `http://localhost:${env.PORT}`;
+};
+
 const getHostedBrandLogoUrl = (): string =>
-  `${env.PUBLIC_BACKEND_URL.replace(/\/+$/, '')}${BRAND_LOGO_ASSET_PATH}`;
+  `${getBackendOriginForEmailAssets()}${BRAND_LOGO_ASSET_PATH}`;
 
 const getBrandLogoSrc = (): string | null => {
   if (!getBrandLogoPath()) {

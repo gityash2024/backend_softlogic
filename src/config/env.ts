@@ -100,7 +100,7 @@ const envSchema = z
       .url()
       .default("https://softlogicwhiteboard.com/download"),
     PUBLIC_APP_URL: z.string().url().default("https://softlogicwhiteboard.com"),
-    PUBLIC_BACKEND_URL: z.string().url().default("http://localhost:3000"),
+    PUBLIC_BACKEND_URL: optionalUrl,
     PUBLIC_ADMIN_URL: z
       .string()
       .url()

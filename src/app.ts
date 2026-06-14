@@ -74,7 +74,11 @@ export const createApp = (): express.Application => {
   // ─── Logging ──────────────────────────────
   app.use(requestLogger);
 
-  app.get('/email-assets/softlogic-logo.png', (_req, res) => {
+  app.get([
+    '/email-assets/softlogic-logo.png',
+    '/api/email-assets/softlogic-logo.png',
+    `${apiPrefix}/email-assets/softlogic-logo.png`,
+  ], (_req, res) => {
     const logoPath = getSoftLogicLogoPath();
     if (!logoPath) {
       res.status(404).json({
