@@ -23,6 +23,11 @@ export const checkAppUpdateQuerySchema = z.object({
   buildNumber: z.coerce.number().int().min(0),
 });
 
+export const currentAppDownloadsQuerySchema = z.object({
+  environment: releaseEnvironmentSchema,
+  brand: releaseBrandSchema,
+});
+
 export const listAppReleasesQuerySchema = z.object({
   environment: releaseEnvironmentSchema.optional(),
   brand: releaseBrandSchema.optional(),
@@ -103,6 +108,7 @@ export const updateAppReleaseSchema = z
   });
 
 export type CheckAppUpdateQuery = z.infer<typeof checkAppUpdateQuerySchema>;
+export type CurrentAppDownloadsQuery = z.infer<typeof currentAppDownloadsQuerySchema>;
 export type ListAppReleasesQuery = z.infer<typeof listAppReleasesQuerySchema>;
 export type PublishFullAppReleaseInput = z.infer<typeof publishFullAppReleaseSchema>;
 export type UpdateAppReleaseInput = z.infer<typeof updateAppReleaseSchema>;

@@ -1,6 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
+import { existsSync } from 'fs';
 import path from 'path';
 import { corsConfig, swaggerSpec } from './config';
 import { createVersionPayload } from './config/version';
@@ -37,6 +38,23 @@ import {
   marketplaceRoutes,
 } from './modules/stubs';
 
+const SOFTLOGIC_LOGO_FILENAME = 'softlogic-logo.png';
+
+const getSoftLogicLogoPath = (): string | null => {
+  const candidatePaths = [
+    path.resolve(process.cwd(), 'src', 'modules', 'auth', 'assets', SOFTLOGIC_LOGO_FILENAME),
+    path.resolve(__dirname, 'modules', 'auth', 'assets', SOFTLOGIC_LOGO_FILENAME),
+  ];
+
+  for (const candidatePath of candidatePaths) {
+    if (existsSync(candidatePath)) {
+      return candidatePath;
+    }
+  }
+
+  return null;
+};
+
 export const createApp = (): express.Application => {
   const app = express();
   const apiPrefix = '/api/v1';
@@ -55,6 +73,23 @@ export const createApp = (): express.Application => {
 
   // ─── Logging ──────────────────────────────
   app.use(requestLogger);
+
+  app.get('/email-assets/softlogic-logo.png', (_req, res) => {
+    const logoPath = getSoftLogicLogoPath();
+    if (!logoPath) {
+      res.status(404).json({
+        success: false,
+        data: null,
+        message: 'Logo asset not found',
+      });
+      return;
+    }
+
+    res.setHeader('Cache-Control', 'public, max-age=86400, immutable');
+    res.setHeader('Content-Type', 'image/png');
+    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+    res.sendFile(logoPath);
+  });
 
   // ─── Rate Limiting ────────────────────────
   app.use(globalRateLimiter);

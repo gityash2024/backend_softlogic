@@ -9,6 +9,7 @@ import { env } from '@/config';
 
 const BRAND_LOGO_CID = 'softlogic-logo';
 const BRAND_LOGO_FILENAME = 'softlogic-logo.png';
+const BRAND_LOGO_ASSET_PATH = '/email-assets/softlogic-logo.png';
 const WHITE_LABEL_EMAIL_BRAND = 'AI Smart Board';
 
 export type EmailBrand = 'SOFTLOGIC' | 'AI_SMART_BOARD';
@@ -179,6 +180,10 @@ const brevoAttachments = async (
   }
   const converted: Array<{ name: string; content: string }> = [];
   for (const attachment of attachments) {
+    if (isBrandLogoAttachment(attachment)) {
+      continue;
+    }
+
     const filename = attachment.filename?.toString() || 'attachment';
     if (typeof attachment.content === 'string' || Buffer.isBuffer(attachment.content)) {
       converted.push({
@@ -195,6 +200,14 @@ const brevoAttachments = async (
     }
   }
   return converted;
+};
+
+const isBrandLogoAttachment = (attachment: Mail.Attachment): boolean => {
+  const filename = attachment.filename?.toString();
+  return (
+    attachment.cid === BRAND_LOGO_CID ||
+    (filename === BRAND_LOGO_FILENAME && attachment.contentDisposition === 'inline')
+  );
 };
 
 const getBrandLogoPath = (): string | null => {
@@ -229,17 +242,32 @@ export const getBrandLogoEmailAttachments = (): Mail.Attachment[] => {
   ];
 };
 
+const getHostedBrandLogoUrl = (): string =>
+  `${env.PUBLIC_BACKEND_URL.replace(/\/+$/, '')}${BRAND_LOGO_ASSET_PATH}`;
+
+const getBrandLogoSrc = (): string | null => {
+  if (!getBrandLogoPath()) {
+    return null;
+  }
+
+  if (isBrevoConfigured()) {
+    return getHostedBrandLogoUrl();
+  }
+
+  return `cid:${BRAND_LOGO_CID}`;
+};
+
 const renderBrandEmailLayout = (
   options: BrandEmailLayoutOptions,
 ): string => {
   const currentYear = new Date().getFullYear();
   const whiteLabel = options.brand === 'AI_SMART_BOARD';
   const brandLabel = whiteLabel ? WHITE_LABEL_EMAIL_BRAND : env.EMAIL_FROM_NAME;
-  const hasBrandLogo = !whiteLabel && getBrandLogoPath() != null;
-  const brandMarkup = hasBrandLogo
+  const brandLogoSrc = whiteLabel ? null : getBrandLogoSrc();
+  const brandMarkup = brandLogoSrc
     ? `
       <div class="brand-lockup">
-        <img src="cid:${BRAND_LOGO_CID}" alt="SoftLogic" class="brand-logo" />
+        <img src="${brandLogoSrc}" alt="SoftLogic" class="brand-logo" />
       </div>
     `
     : `<div class="brand-chip">${brandLabel}</div>`;

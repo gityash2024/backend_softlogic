@@ -18,6 +18,7 @@ const baseEnv = {
   EMAIL_FROM_NAME: 'SoftLogic',
   EMAIL_FROM: 'noreply@softlogic.test',
   BREVO_API_URL: 'https://api.brevo.test/v3/smtp/email',
+  PUBLIC_BACKEND_URL: 'https://api.softlogic.test',
   PUBLIC_APP_URL: 'https://app.softlogic.test',
   PUBLIC_DOWNLOAD_PAGE_URL: 'https://downloads.softlogic.test',
 };
@@ -93,6 +94,67 @@ describe('email provider selection', () => {
     expect(mockSendMail).not.toHaveBeenCalled();
   });
 
+  it('uses hosted SoftLogic logo for Brevo without sending it as an attachment', async () => {
+    const { getOtpEmailHtml, sendEmail } = await loadEmailModule({
+      EMAIL_PROVIDER: 'brevo',
+      BREVO_API_KEY: 'brevo-secret',
+    });
+
+    await sendEmail({
+      to: 'teacher@example.com',
+      subject: 'Your SoftLogic code',
+      html: getOtpEmailHtml('1234'),
+      attachments: [
+        {
+          cid: 'softlogic-logo',
+          contentDisposition: 'inline',
+          contentType: 'image/png',
+          filename: 'softlogic-logo.png',
+          path: '/tmp/missing-softlogic-logo.png',
+        },
+      ],
+    });
+
+    const [, request] = (global.fetch as jest.Mock).mock.calls[0];
+    const body = JSON.parse(request.body);
+    expect(body.htmlContent).toContain(
+      'src="https://api.softlogic.test/email-assets/softlogic-logo.png"',
+    );
+    expect(body.htmlContent).not.toContain('cid:softlogic-logo');
+    expect(body.attachment).toBeUndefined();
+  });
+
+  it('keeps AI Smart Board emails badge-only with no SoftLogic logo attachment', async () => {
+    const { getOtpEmailHtml, sendEmail } = await loadEmailModule({
+      EMAIL_PROVIDER: 'brevo',
+      BREVO_API_KEY: 'brevo-secret',
+    });
+
+    await sendEmail({
+      brand: 'AI_SMART_BOARD',
+      to: 'teacher@example.com',
+      subject: 'Your SoftLogic code',
+      html: getOtpEmailHtml('1234', 'AI_SMART_BOARD'),
+      attachments: [
+        {
+          cid: 'softlogic-logo',
+          contentDisposition: 'inline',
+          contentType: 'image/png',
+          filename: 'softlogic-logo.png',
+          path: '/tmp/missing-softlogic-logo.png',
+        },
+      ],
+    });
+
+    const [, request] = (global.fetch as jest.Mock).mock.calls[0];
+    const body = JSON.parse(request.body);
+    expect(body.subject).toBe('Your AI Smart Board code');
+    expect(body.htmlContent).toContain('AI Smart Board');
+    expect(body.htmlContent).not.toContain('softlogic-logo');
+    expect(body.htmlContent).not.toContain('/email-assets/softlogic-logo.png');
+    expect(body.attachment).toBeUndefined();
+  });
+
   it('falls back to EMAIL_FROM for Brevo sender when no provider sender is set', async () => {
     const { sendEmail } = await loadEmailModule({
       EMAIL_PROVIDER: 'brevo',
@@ -111,7 +173,7 @@ describe('email provider selection', () => {
   });
 
   it('uses SMTP when Brevo is not selected', async () => {
-    const { sendEmail } = await loadEmailModule({
+    const { getOtpEmailHtml, sendEmail } = await loadEmailModule({
       EMAIL_PROVIDER: 'smtp',
       BREVO_API_KEY: 'brevo-secret',
     });
@@ -119,15 +181,31 @@ describe('email provider selection', () => {
     await sendEmail({
       to: 'teacher@example.com',
       subject: 'Setup your account',
-      html: '<p>Hello</p>',
+      html: getOtpEmailHtml('1234'),
+      attachments: [
+        {
+          cid: 'softlogic-logo',
+          contentDisposition: 'inline',
+          contentType: 'image/png',
+          filename: 'softlogic-logo.png',
+          path: '/tmp/softlogic-logo.png',
+        },
+      ],
     });
 
     expect(mockSendMail).toHaveBeenCalledWith(
       expect.objectContaining({
+        attachments: expect.arrayContaining([
+          expect.objectContaining({
+            cid: 'softlogic-logo',
+            contentDisposition: 'inline',
+            filename: 'softlogic-logo.png',
+          }),
+        ]),
         from: '"SoftLogic" <noreply@softlogic.test>',
         to: 'teacher@example.com',
         subject: 'Setup your account',
-        html: '<p>Hello</p>',
+        html: expect.stringContaining('cid:softlogic-logo'),
       }),
     );
     expect(global.fetch).not.toHaveBeenCalled();

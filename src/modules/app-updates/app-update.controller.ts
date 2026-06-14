@@ -3,6 +3,7 @@ import { ApiResponse } from '@/shared/utils/api-response';
 import { appUpdateService } from './app-update.service';
 import type {
   CheckAppUpdateQuery,
+  CurrentAppDownloadsQuery,
   ListAppReleasesQuery,
   PublishFullAppReleaseInput,
   UpdateAppReleaseInput,
@@ -17,6 +18,20 @@ export class AppUpdateController {
           req.query as unknown as CheckAppUpdateQuery,
         ),
         'App update checked',
+      );
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async current(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      ApiResponse.success(
+        res,
+        await appUpdateService.getCurrentDownloads(
+          req.query as unknown as CurrentAppDownloadsQuery,
+        ),
+        'Current app downloads fetched',
       );
     } catch (error) {
       next(error);

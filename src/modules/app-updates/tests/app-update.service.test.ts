@@ -180,6 +180,77 @@ describe('AppUpdateService', () => {
     );
   });
 
+  it('returns current downloads only for the requested environment and brand', async () => {
+    appReleaseMock.findMany.mockResolvedValue([
+      release({
+        environment: AppReleaseEnvironment.STAGING,
+        brand: AppReleaseBrand.AI_SMART_BOARD,
+        platform: AppReleasePlatform.ANDROID,
+        downloadUrl: 'https://drive.google.com/file/d/staging-ai-apk/view?usp=sharing',
+      }),
+      release({
+        environment: AppReleaseEnvironment.STAGING,
+        brand: AppReleaseBrand.AI_SMART_BOARD,
+        platform: AppReleasePlatform.WINDOWS,
+        downloadUrl: 'https://drive.google.com/file/d/staging-ai-exe/view?usp=sharing',
+      }),
+    ]);
+
+    const result = await appUpdateService.getCurrentDownloads({
+      environment: 'staging',
+      brand: 'ai_smart_board',
+    });
+
+    expect(appReleaseMock.findMany).toHaveBeenCalledWith({
+      where: {
+        environment: AppReleaseEnvironment.STAGING,
+        brand: AppReleaseBrand.AI_SMART_BOARD,
+        platform: {
+          in: [AppReleasePlatform.ANDROID, AppReleasePlatform.WINDOWS],
+        },
+        isActive: true,
+        isCurrent: true,
+      },
+      orderBy: [{ platform: 'asc' }, { buildNumber: 'desc' }, { createdAt: 'desc' }],
+    });
+    expect(result).toEqual([
+      expect.objectContaining({
+        environment: 'staging',
+        brand: 'ai_smart_board',
+        platform: 'android',
+        downloadUrl: 'https://drive.google.com/file/d/staging-ai-apk/view?usp=sharing',
+      }),
+      expect.objectContaining({
+        environment: 'staging',
+        brand: 'ai_smart_board',
+        platform: 'windows',
+        downloadUrl: 'https://drive.google.com/file/d/staging-ai-exe/view?usp=sharing',
+      }),
+    ]);
+  });
+
+  it('ignores inactive or non-current downloads through the current-download query filter', async () => {
+    appReleaseMock.findMany.mockResolvedValue([]);
+
+    await expect(
+      appUpdateService.getCurrentDownloads({
+        environment: 'production',
+        brand: 'softlogic',
+      }),
+    ).resolves.toEqual([]);
+
+    expect(appReleaseMock.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          environment: AppReleaseEnvironment.PRODUCTION,
+          brand: AppReleaseBrand.SOFTLOGIC,
+          isActive: true,
+          isCurrent: true,
+        }),
+      }),
+    );
+  });
+
   it('blocks release management for non Super Admin users', async () => {
     await expect(
       appUpdateService.listReleases(

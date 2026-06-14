@@ -1,4 +1,4 @@
-import { AppRelease, Prisma, UserRole } from '@prisma/client';
+import { AppRelease, AppReleasePlatform, Prisma, UserRole } from '@prisma/client';
 import { prisma } from '@/config';
 import { AppError } from '@/shared/errors/AppError';
 import { writeAuditLog } from '@/shared/utils/audit';
@@ -13,6 +13,7 @@ import {
 } from './app-update.mapper';
 import type {
   CheckAppUpdateQuery,
+  CurrentAppDownloadsQuery,
   ListAppReleasesQuery,
   PublishFullAppReleaseInput,
   UpdateAppReleaseInput,
@@ -72,6 +73,21 @@ export class AppUpdateService {
       updateAvailable: true,
       release: toPublicUpdateRelease(latest),
     };
+  }
+
+  async getCurrentDownloads(query: CurrentAppDownloadsQuery) {
+    const releases = await prisma.appRelease.findMany({
+      where: {
+        environment: toReleaseEnvironment(query.environment),
+        brand: toReleaseBrand(query.brand),
+        platform: { in: [AppReleasePlatform.ANDROID, AppReleasePlatform.WINDOWS] },
+        isActive: true,
+        isCurrent: true,
+      },
+      orderBy: [{ platform: 'asc' }, { buildNumber: 'desc' }, { createdAt: 'desc' }],
+    });
+
+    return releases.map(toPublicUpdateRelease);
   }
 
   async listReleases(actor: Actor, query: ListAppReleasesQuery) {
